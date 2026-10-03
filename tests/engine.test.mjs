@@ -121,5 +121,14 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('late: 26 Nov not shown as predicted period', dayInfo('2026-11-26', r, ps, {}).predictedPeriod || null, null);
 }
 
+// 14. Open period that runs longer than usual: still "Period" while bleeding is logged
+{
+  const ps = P('2026-07-03', '2026-08-02', '2026-08-30', '2026-09-29');
+  const days = { '2026-10-03': { flow: 'medium' }, '2026-10-04': { flow: 'light' } };
+  eq('day 6 with bleeding logged → period, not follicular', predict(ps, {}, '2026-10-04', days).state.id, 'menstruation');
+  eq('calendar shows 4 Oct as period', dayInfo('2026-10-04', predict(ps, {}, '2026-10-04', days), ps, days).logged, true);
+  eq('explicit "none" ends it', predict(ps, {}, '2026-10-05', { ...days, '2026-10-05': { flow: 'none' } }).state.id, 'follicular');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

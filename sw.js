@@ -1,7 +1,7 @@
 // Offline copy of the app's own files (NFR-04). Bump VERSION with every build.
 // Only this app's files are cached; Google sign-in and Drive traffic always go straight to the network.
-const VERSION = 'cycle-v1';
-const FILES = ['./', './index.html', './styles.css', './app.js', './engine.js', './crypto.js', './lock.js', './cloud.js', './config.js',
+const VERSION = 'cycle-v2';
+const FILES = ['./', './index.html', './styles.css', './app.js', './engine.js', './content.js', './rules.js', './crypto.js', './lock.js', './cloud.js', './config.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

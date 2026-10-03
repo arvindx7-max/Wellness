@@ -1,10 +1,12 @@
-// Cycle — v1 (Phase 1). Spec v0.3: FR-01–FR-11, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v2 (Phases 1–3). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
 import * as C from './cloud.js';
+import * as T from './content.js';
+import { evaluate, recsFor, heavyDays } from './rules.js';
 
-export const VERSION = 'v1';
+export const VERSION = 'v2';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -22,7 +24,9 @@ const S = {
   sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0,
   cloud: { token: null, status: 'off', msg: '', busy: false },
 };
-const fresh = () => ({ app: 'cycle', v: 1, settings: { updatedAt: Date.now() }, periods: [], days: {} });
+const fresh = () => ({ app: 'cycle', v: 1, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
+// v1 data has no check-ins or acknowledgements yet
+const upgrade = (d) => ({ ...d, days: d.days || {}, checkins: d.checkins || {}, acks: d.acks || {} });
 const today = () => localToday();
 const uid = () => `p${Date.now().toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -38,7 +42,17 @@ function fmt(d, withYear = false) {
 const weekday = (d) => WD[(new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay() + 6) % 7];
 const plural = (n, w) => `${n} ${w}${Math.abs(n) === 1 ? '' : 's'}`;
 
-function recompute() { S.pred = S.data ? predict(S.data.periods, S.data.settings, today()) : null; }
+function recompute() {
+  S.pred = S.data ? predict(S.data.periods, S.data.settings, today(), S.data.days) : null;
+  S.flags = S.data && S.pred && !S.pred.empty ? evaluate(S.data, S.pred, today()) : [];
+}
+// The phase a given day belongs to, for check-in questions and food cards.
+function phaseOn(date) {
+  if (!S.data || !livePeriods(S.data.periods).some((p) => diff(date, p.start) >= 0)) return 'other';
+  const ps = livePeriods(S.data.periods).filter((p) => diff(date, p.start) >= 0);
+  const id = predict(ps, S.data.settings, date, S.data.days).state.id;
+  return ['menstruation', 'follicular', 'fertile', 'luteal', 'late'].includes(id) ? id : 'other';
+}
 async function persist() {
   S.data.updatedAt = Date.now();
   await kvSet('sealed', await K.seal(S.data, S.key));
@@ -61,7 +75,7 @@ function render() {
   else if (S.view === 'restore') app.innerHTML = restoreView();
   else if (S.view === 'locked') app.innerHTML = lockedView();
   else if (S.view === 'app') {
-    app.innerHTML = `<main class="screen">${{ today: todayView, calendar: calendarView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
+    app.innerHTML = `<main class="screen">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
   if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true">${sheetBody()}</div>`; sh.hidden = false; }
@@ -164,6 +178,7 @@ function todayView() {
     : st.id === 'menstruation' ? '' : `<button class="btn primary" data-act="period-start" data-date="${t}">Period started today</button><button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
   const flow = (S.data.days[t] || {}).flow || 'none';
   return `${topbar('Today', `${weekday(t)}, ${fmt(t, true)}`)}
+  ${flagCards()}
   <section class="ring-block">
     ${cycleRing(p)}
     <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div>
@@ -175,7 +190,9 @@ function todayView() {
   <div class="actions">${actions}</div>
   <section class="card"><h2>Bleeding today</h2>
     <div class="chips" role="radiogroup" aria-label="Bleeding today">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" role="radio" aria-checked="${flow === v}" data-act="flow" data-date="${t}" data-flow="${v}">${l}</button>`).join('')}</div></section>
-  ${p.notes.map(noteCard).join('')}`;
+  ${checkinCard(t)}
+  ${foodTeaser()}
+  ${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}`;
 }
 const WARNING = 'Calendar-based estimate. With typical use, fertility-awareness methods lead to 12–24 pregnancies per 100 women in the first year. This is not a reliable method of birth control: use contraception on any day if you want to avoid pregnancy.';
 const FLOWS = [['none', 'None'], ['spotting', 'Spotting'], ['light', 'Light'], ['medium', 'Medium'], ['heavy', 'Heavy']];
@@ -184,6 +201,80 @@ function confidenceText(p) {
   if (p.usedCycles) return `Low confidence: based on ${plural(p.usedCycles, 'cycle')} so far.`;
   return p.usedDefault ? 'Low confidence: no cycle logged yet, so a typical 29-day cycle is assumed.' : 'Low confidence: based on the cycle length you entered.';
 }
+// ---------------- v2: warnings, check-in, suggestions, food ----------------
+function flagCards() {
+  const open = (S.flags || []).filter((f) => !S.data.acks[f.id]);
+  const urgent = open.filter((f) => f.level === 'urgent');
+  const one = urgent.length > 1 ? `<section class="flag urgent" role="alert"><h2>Seek medical care today</h2><ul>${urgent.map((f) => `<li>${h(f.text)}</li>`).join('')}</ul>
+    <p class="fine">Source: <a href="${T.SRC.mayoHmb.url}" target="_blank" rel="noopener noreferrer">${h(T.SRC.mayoHmb.name)}</a></p>
+    <button class="btn small" data-act="ack" data-id="${h(urgent.map((f) => f.id).join('|'))}">I have read this</button></section>` : '';
+  return one + open.filter((f) => !(one && f.level === 'urgent')).map((f) => `<section class="flag ${f.level}" role="alert"><h2>${h(f.title)}</h2><p>${h(f.text)}</p>
+    ${f.phone ? `<a class="btn primary" href="tel:${f.phone}">Call 0800 111 0 111</a>` : ''}
+    ${f.src ? `<p class="fine">Source: <a href="${T.SRC[f.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[f.src].name)}</a></p>` : ''}
+    <button class="btn small" data-act="ack" data-id="${h(f.id)}">I have read this</button></section>`).join('');
+}
+function checkinCard(date) {
+  const ci = S.data.checkins[date];
+  const recs = ci ? recsFor(ci, phaseOn(date)) : [];
+  if (!ci) return `<section class="card checkin"><h2>How are you today?</h2><p class="fine">A few quick questions for this part of your cycle. Takes under 30 seconds.</p><button class="btn primary" data-act="checkin" data-date="${date}">Start check-in</button></section>`;
+  const logged = Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`);
+  return `<section class="card checkin"><h2>Today's check-in</h2><p class="fine">${logged.length ? h(logged.join(', ')) : 'No symptoms logged.'}</p>
+    ${recs.map(recBlock).join('')}
+    <button class="btn small" data-act="checkin" data-date="${date}">Edit check-in</button></section>`;
+}
+function recBlock(r) {
+  return `<div class="rec"><h3>${h(r.title)}</h3><p>${h(r.text)}</p>${r.escalate ? `<p class="esc">${h(r.escalate)}</p>` : ''}
+    ${r.src ? `<p class="fine">Source: <a href="${T.SRC[r.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[r.src].name)}</a></p>` : ''}</div>`;
+}
+function foodTeaser() {
+  const ph = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular'; const f = T.FOOD[ph];
+  return `<section class="card food-teaser"><h2>Food for now: ${h(f.title.toLowerCase())}</h2><p class="fine">${h(f.why)}</p><button class="btn small" data-tab="food">See foods</button></section>`;
+}
+const phaseKey = (id) => (['menstruation', 'luteal', 'late', 'fertile', 'follicular'].includes(id) ? id : 'follicular');
+
+function foodView() {
+  const cur = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular';
+  const show = S.foodTab || cur;
+  const tabs = [['menstruation', 'During your period'], ['follicular', 'Rest of the cycle'], ['luteal', 'Before your period']];
+  const f = T.FOOD[show];
+  const heavy = show === 'menstruation' && heavyDays(S.data, S.pred) >= 2;
+  return `${topbar('Food')}
+  <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${show === k || (k === 'follicular' && ['fertile', 'late'].includes(show))}" data-act="foodtab" data-k="${k}">${l}${phaseKey(cur) === k || (k === 'follicular' && ['fertile'].includes(cur)) ? ' (now)' : ''}</button>`).join('')}</div>
+  <section class="card"><h2>${h(f.title)}</h2><p>${h(f.why)}</p>
+    ${heavy ? `<p class="esc">${h(T.HEAVY_IRON_NOTE)}</p>` : ''}
+    ${f.groups.map((g) => `<h3>${h(g.name)}</h3><ul class="foods">${g.items.map(([n, v]) => `<li><span>${h(n)}</span>${v ? `<b>${h(v)}</b>` : ''}</li>`).join('')}</ul>`).join('')}
+    ${f.tips.map((t) => `<p class="tip">${h(t)}</p>`).join('')}
+    ${f.src.length ? `<p class="fine">Sources: ${f.src.map((s) => `<a href="${T.SRC[s].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[s].name)}</a>`).join('; ')}. Iron values per serving from the NIH table (USDA FoodData Central).</p>` : ''}
+  </section>
+  <p class="fine">Food lists leave out beef, pork and other red meat. Cycle gives no supplement doses; ask your doctor before taking any.</p>`;
+}
+
+function checkinSheet(date) {
+  const ph = phaseOn(date); const q = T.CHECKIN[ph]; const ci = S.data.checkins[date] || {}; const sy = ci.symptoms || {};
+  const flow = (S.data.days[date] || {}).flow || 'none';
+  const yesno = (name, text) => `<fieldset class="q"><legend>${text}</legend>${[['1', 'Yes'], ['', 'No']].map(([v, l]) => `<label class="pick"><input type="radio" name="${name}" value="${v}" ${(!!ci[name]) === (v === '1') && (name in ci || v === '') ? 'checked' : ''}><span>${l}</span></label>`).join('')}</fieldset>`;
+  const scale = (code) => `<fieldset class="q scale"><legend>${h(T.label(code))}</legend>${[0, 1, 2, 3].map((v) => `<label class="pick"><input type="radio" name="s_${code}" value="${v}" ${(sy[code] || 0) === v ? 'checked' : ''}><span>${v ? T.SEVERITY[v] : 'None'}</span></label>`).join('')}</fieldset>`;
+  const asks = { flow: `<fieldset class="q"><legend>Bleeding</legend>${FLOWS.map(([v, l]) => `<label class="pick"><input type="radio" name="flow" value="${v}" ${flow === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</fieldset>`,
+    change: `<fieldset class="q col"><legend>How often did you need to change your pad, tampon or cup?</legend>${T.CHANGE.map(([v, l]) => `<label class="pick"><input type="radio" name="change" value="${v}" ${ci.change === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}<label class="pick"><input type="radio" name="change" value="" ${!ci.change ? 'checked' : ''}><span>Not sure / not today</span></label></fieldset>`,
+    clots: yesno('clots', 'Any clots the size of a 2-euro coin (2.5 cm) or larger?'),
+    dizzy: yesno('dizzy', 'Feeling dizzy, faint, or a racing heart?'),
+    discharge: `<fieldset class="q"><legend>Discharge</legend>${T.DISCHARGE.map(([v, l]) => `<label class="pick"><input type="radio" name="discharge" value="${v}" ${ci.discharge === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}<label class="pick"><input type="radio" name="discharge" value="" ${!ci.discharge ? 'checked' : ''}><span>Not noted</span></label></fieldset>`,
+    sidepain: yesno('sidepain', 'Pain on one side of your lower belly?') };
+  const others = T.SYMPTOMS.filter((s) => !q.symptoms.includes(s.code));
+  const extraOpen = others.some((s) => sy[s.code]);
+  return `<h2>${h(q.title)}: ${date === today() ? 'today' : fmt(date)}</h2>
+  <form class="stack checkin-form" data-form="checkin" data-date="${date}">
+    ${q.ask.map((k) => asks[k]).join('')}
+    ${q.symptoms.map(scale).join('')}
+    <fieldset class="q"><legend>Mood</legend>${T.MOOD_GOOD.map((m) => `<label class="pick"><input type="checkbox" name="g_${m.code}" ${sy[m.code] ? 'checked' : ''}><span>${m.label}</span></label>`).join('')}</fieldset>
+    <details ${extraOpen ? 'open' : ''}><summary>Log another symptom</summary>${others.map((s) => scale(s.code)).join('')}</details>
+    <label>Pain relief or medicine taken<input type="text" name="meds" maxlength="80" value="${h(ci.meds || '')}" placeholder="Optional"></label>
+    <label>Notes<textarea name="note" rows="2" maxlength="500" placeholder="Optional">${h(ci.note || '')}</textarea></label>
+    <p class="fine">Severity: mild = noticeable, moderate = disrupts the day, severe = stops normal activities.</p>
+    <button class="btn primary">Save check-in</button>
+  </form><button class="btn wide" data-act="close-sheet">Cancel</button>`;
+}
+
 function noteCard(n) {
   const btn = n.kind === 'late' ? '<button class="btn" data-act="add-past">Add an earlier start date</button>'
     : n.kind === 'check' ? '<button class="btn" data-tab="history">Review in History</button>' : '';
@@ -318,12 +409,14 @@ function settingsView() {
     <label class="btn file">Import a backup<input type="file" accept="application/json,.json" data-act="import-json" hidden></label>
     <button class="btn danger" data-act="wipe">Delete all data on this device</button></section>
   <section class="card about"><h2>About</h2>
-    <p class="fine">Cycle ${VERSION}. A wellness tracker, not medical advice and not a method of birth control. Predictions follow published cycle data:</p>
+    <p class="fine">Cycle ${VERSION}. A wellness tracker, not medical advice and not a method of birth control. Predictions, suggestions and food lists follow these sources:</p>
     <ul class="fine sources">
       <li>Bull et al. 2019, 612,613 cycles (npj Digital Medicine): luteal phase 12.4 ± 2.4 days, mean cycle 29.3 days, bleed 4.0 days</li>
       <li>Wilcox 2000 and ACOG: fertile window from 5 days before to 1 day after ovulation</li>
       <li>FIGO 2018: normal cycle 24–38 days, normal variation about ±4 days</li>
       <li>ACOG: 12–24 pregnancies per 100 women in the first year of typical fertility-awareness use</li>
+      <li>ACOG, Mayo Clinic and CDC: suggestions for symptoms and the warning signs for heavy or unusual bleeding</li>
+      <li>NIH Office of Dietary Supplements: iron needs, iron in foods, and what helps or reduces its absorption</li>
     </ul></section>`;
 }
 function syncCard() {
@@ -349,7 +442,7 @@ function syncPill() {
   return `<button class="pill ${c.status === 'error' ? 'bad' : tokenOk() && !c.busy ? 'ok' : ''}" data-tab="settings">${txt}</button>`;
 }
 function navBar() {
-  const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'],
+  const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'], ['food', 'Food', '<path d="M12 21c-4.5 0-7-3.5-7-7.5C5 9 8 6 12 6s7 3 7 7.5c0 4-2.5 7.5-7 7.5z"/><path d="M12 6c0-1.6 1-3 2.5-3.5"/>'],
     ['history', 'History', '<path d="M5 6h14M5 12h14M5 18h9"/>'], ['settings', 'Settings', '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>']];
   return `<nav class="tabs">${tabs.map(([id, l, ic]) => `<button data-tab="${id}" class="${S.tab === id ? 'on' : ''}" aria-current="${S.tab === id ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}</nav>`;
 }
@@ -370,8 +463,10 @@ function sheetBody() {
     }
     return `<h2>${weekday(d)}, ${fmt(d, true)}</h2><p class="fine">${h(describe(info)).replace(/^./, (c) => c.toUpperCase())}.${future ? ' Future days show estimates only.' : ''}</p>
       ${future ? '' : `<h3>Bleeding</h3><div class="chips">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" data-act="flow" data-date="${d}" data-flow="${v}">${l}</button>`).join('')}</div>`}
+      ${future ? '' : daySymptoms(d)}
       <div class="stack-btns">${acts}<button class="btn" data-act="close-sheet">Close</button></div>`;
   }
+  if (s.name === 'checkin') return checkinSheet(s.date);
   if (s.name === 'confirm-start') {
     const cd = S.pred && !S.pred.empty ? diff(s.date, S.pred.lastStart) + 1 : null;
     const mid = cd && cd >= 10 && cd <= 18;
@@ -406,6 +501,12 @@ function sheetBody() {
     return `<h2>${h(s.title)}</h2><p class="fine">${h(s.text)}</p><div class="stack-btns"><button class="btn ${s.danger ? 'danger' : 'primary'}" data-act="confirm-yes">${h(s.yes)}</button><button class="btn" data-act="close-sheet">Cancel</button></div>`;
   }
   return '';
+}
+function daySymptoms(d) {
+  const ci = S.data.checkins[d];
+  const logged = ci ? Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`) : [];
+  return `<h3>Check-in</h3><p class="fine">${ci ? (logged.length ? h(logged.join(', ')) : 'No symptoms logged.') + (ci.note ? ` Note: ${h(ci.note)}` : '') : 'No check-in for this day.'}</p>
+    <button class="btn small" data-act="checkin" data-date="${d}">${ci ? 'Edit check-in' : 'Add a check-in for this day'}</button>`;
 }
 function confirmSheet(title, text, yes, fn, danger = false) { S.confirmFn = fn; openSheet('confirm', { title, text, yes, danger }); }
 
@@ -473,6 +574,9 @@ document.addEventListener('click', async (e) => {
     else if (a === 'confirm-yes') { const fn = S.confirmFn; S.confirmFn = null; if (fn) await fn(); }
     else if (a === 'flow') await setFlow(d, b.dataset.flow);
     else if (a === 'day') openSheet('day', { date: d });
+    else if (a === 'checkin') openSheet('checkin', { date: d });
+    else if (a === 'foodtab') { S.foodTab = b.dataset.k; render(); }
+    else if (a === 'ack') { for (const id of b.dataset.id.split('|')) S.data.acks[id] = { at: new Date().toISOString(), updatedAt: Date.now() }; await persist(); render(); }
     else if (a === 'month') { const [y, m] = (S.month || today().slice(0, 7)).split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1 + Number(b.dataset.step), 1)); S.month = dt.toISOString().slice(0, 7); render(); }
     else if (a === 'month-today') { S.month = null; render(); }
     else if (a === 'wording-accept') { S.data.settings = { ...S.data.settings, wording: true, wordingAcceptedAt: new Date().toISOString(), updatedAt: Date.now() }; await persist(); closeSheet(); toast('Pregnancy-chance wording is on'); }
@@ -500,7 +604,7 @@ document.addEventListener('change', async (e) => {
     try {
       const inc = JSON.parse(await el.files[0].text());
       if (inc.app !== 'cycle' || !Array.isArray(inc.periods)) throw new Error('This file is not a Cycle backup.');
-      S.data = C.merge(S.data, inc); await persist(); render(); toast(`Backup imported: ${livePeriods(inc.periods).length} periods`);
+      S.data = upgrade(C.merge(S.data, inc)); await persist(); render(); toast(`Backup imported: ${livePeriods(inc.periods).length} periods`);
     } catch (err) { toast(err.message); }
     el.value = '';
   }
@@ -527,7 +631,7 @@ document.addEventListener('submit', async (e) => {
     } else if (kind === 'unlock') {
       busy(true, 'Unlocking');
       const key = await K.deriveKey(fd.get('p'), S.meta.salt, S.meta.iter);
-      S.data = await K.open(await kvGet('sealed'), key); S.key = key; afterUnlock();
+      S.data = upgrade(await K.open(await kvGet('sealed'), key)); S.key = key; afterUnlock();
     } else if (kind === 'restore') {
       busy(true, 'Restoring');
       await restoreFlow(fd.get('p'));
@@ -541,6 +645,20 @@ document.addEventListener('submit', async (e) => {
       if (id) Object.assign(S.data.periods.find((x) => x.id === id), { start, end, excluded: !!fd.get('excluded'), excludeReason: fd.get('excluded') ? fd.get('excludeReason') : '', updatedAt: Date.now() });
       else S.data.periods.push({ id: uid(), start, end, updatedAt: Date.now() });
       await persist(); closeSheet(); toast('Period saved');
+    } else if (kind === 'checkin') {
+      const date = f.dataset.date; const symptoms = {};
+      for (const [k, v] of fd.entries()) {
+        if (k.startsWith('s_') && Number(v) > 0) symptoms[k.slice(2)] = Number(v);
+        if (k.startsWith('g_')) symptoms[k.slice(2)] = 1;
+      }
+      const ci = { symptoms, updatedAt: Date.now() };
+      for (const k of ['change', 'discharge']) if (fd.get(k)) ci[k] = fd.get(k);
+      for (const k of ['clots', 'dizzy', 'sidepain']) if (fd.has(k)) ci[k] = fd.get(k) === '1';
+      if ((fd.get('meds') || '').trim()) ci.meds = fd.get('meds').trim();
+      if ((fd.get('note') || '').trim()) ci.note = fd.get('note').trim();
+      S.data.checkins[date] = ci;
+      if (fd.has('flow') && fd.get('flow') !== ((S.data.days[date] || {}).flow || 'none')) S.data.days[date] = { flow: fd.get('flow'), updatedAt: Date.now() };
+      await persist(); S.sheet = null; render(); window.scrollTo(0, 0); toast('Check-in saved');
     } else if (kind === 'end-earlier') await endPeriod(fd.get('end'));
     else if (kind === 'settings') {
       const num = (k, lo, hi) => { const v = Number(fd.get(k)); return v >= lo && v <= hi ? v : null; };
@@ -562,7 +680,7 @@ async function faceIdSetup() {
 }
 async function unlockFaceId() {
   busy(true, 'Waiting for Face ID');
-  try { const key = await Lock.unlock(S.meta.lock); S.data = await K.open(await kvGet('sealed'), key); S.key = key; afterUnlock(); }
+  try { const key = await Lock.unlock(S.meta.lock); S.data = upgrade(await K.open(await kvGet('sealed'), key)); S.key = key; afterUnlock(); }
   catch (e) { busy(false); toast(e.message); }
 }
 
@@ -586,7 +704,7 @@ async function restoreFlow(pass) {
   const head = C.vaultHeader(text); const key = await K.deriveKey(pass, head.salt, head.iter);
   const data = await C.openVault(text, key);
   const meta = await C.fileMeta(tok, S.restore.fileId);
-  S.key = key; S.data = data;
+  S.key = key; S.data = upgrade(data);
   S.meta = { salt: head.salt, iter: head.iter, created: new Date().toISOString(), lock: null, cloud: { fileId: S.restore.fileId, remoteModified: meta.modifiedTime, lastSync: new Date().toISOString(), dirty: false } };
   S.cloud.token = S.restore.token; await kvSet('gtoken', S.cloud.token);
   await kvSet('meta', S.meta); await kvSet('sealed', await K.seal(S.data, S.key)); S.restore = null;
@@ -617,8 +735,8 @@ async function syncNow(quiet = false) {
     const fm = await C.fileMeta(tok, m.fileId);
     if (fm.modifiedTime !== m.remoteModified) {
       const remote = await C.openVault(await C.download(tok, m.fileId), S.key);
-      const merged = C.merge(S.data, remote);
-      const changedHere = JSON.stringify(merged) !== JSON.stringify(C.merge(remote, remote));
+      const merged = upgrade(C.merge(S.data, remote));
+      const changedHere = JSON.stringify(merged) !== JSON.stringify(upgrade(C.merge(remote, remote)));
       S.data = merged; await kvSet('sealed', await K.seal(S.data, S.key)); recompute();
       m.remoteModified = fm.modifiedTime;
       if (changedHere) m.dirty = true;

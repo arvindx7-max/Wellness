@@ -89,5 +89,7 @@ export function merge(local, remote) {
   for (const p of [...(local.periods || []), ...(remote.periods || [])]) byId[p.id] = byId[p.id] ? newer(byId[p.id], p) : p;
   const days = { ...(local.days || {}) };
   for (const [d, v] of Object.entries(remote.days || {})) days[d] = days[d] ? newer(days[d], v) : v;
-  return { app: 'cycle', v: 1, settings: newer(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days };
+  const perKey = (a = {}, b = {}) => { const o = { ...a }; for (const [k, v] of Object.entries(b)) o[k] = o[k] ? newer(o[k], v) : v; return o; };
+  return { app: 'cycle', v: 1, settings: newer(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
+    checkins: perKey(local.checkins, remote.checkins), acks: perKey(local.acks, remote.acks) };
 }

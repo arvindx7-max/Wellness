@@ -51,10 +51,23 @@ export function cycles(periods) {
   return out;
 }
 
+// End of a period: the logged end, or for an open period the predicted length extended through later
+// logged bleeding. Unlogged days count as unknown; an explicit "none" stops it; capped at 15 days.
+const BLEED = ['spotting', 'light', 'medium', 'heavy'];
+export function periodEnd(p, periodLen, days = {}) {
+  if (p.end && isDate(p.end)) return p.end;
+  let end = addDays(p.start, periodLen - 1);
+  for (let d = addDays(end, 1); diff(d, p.start) < 15; d = addDays(d, 1)) {
+    const f = days[d] && days[d].flow;
+    if (f === 'none') break;
+    if (BLEED.includes(f)) end = d;
+  }
+  return end;
+}
 export function periodLength(p) { return p.end && isDate(p.end) && diff(p.end, p.start) >= 0 ? diff(p.end, p.start) + 1 : null; }
 
 // ---------- the prediction (spec 3.2, 3.3, 3.5) ----------
-export function predict(periods, settings = {}, today = localToday()) {
+export function predict(periods, settings = {}, today = localToday(), days = {}) {
   const ps = livePeriods(periods);
   if (!ps.length) return { empty: true };
   const cyc = cycles(ps);
@@ -85,7 +98,7 @@ export function predict(periods, settings = {}, today = localToday()) {
     lastStart: last.start, lastPeriod: last, nextStart: cur.nextStart,
     nextRange: [addDays(cur.nextStart, -spread), addDays(cur.nextStart, spread)],
     ovulation: cur.ovulation, peak: cur.peak, possible: cur.possible,
-    cycles: cyclesOut, state: stateOn(today, { last, periodLen, cur, spread }),
+    cycles: cyclesOut, state: stateOn(today, { last, periodLen, cur, spread, days }),
     notes: notesFor(cyc, cur, today, spread),
   };
 }
@@ -107,12 +120,12 @@ function windowFor(start, nextStart, s, k) {
 const within = (d, [a, b]) => diff(d, a) >= 0 && diff(b, d) >= 0;
 
 // 3.9: exactly one state per day.
-function stateOn(today, { last, periodLen, cur, spread }) {
+function stateOn(today, { last, periodLen, cur, spread, days }) {
   const cycleDay = diff(today, last.start) + 1;
-  const periodEnd = last.end && isDate(last.end) ? last.end : addDays(last.start, periodLen - 1);
+  const pEnd = periodEnd(last, periodLen, days);
   const base = { cycleDay, daysToNext: diff(cur.nextStart, today) };
   if (cycleDay < 1) return { ...base, id: 'before', label: 'Before your first logged period' };
-  if (diff(periodEnd, today) >= 0) return { ...base, id: 'menstruation', label: 'Period', periodOpen: !last.end };
+  if (diff(pEnd, today) >= 0) return { ...base, id: 'menstruation', label: 'Period', periodOpen: !last.end };
   if (diff(today, addDays(cur.nextStart, spread)) > 0) return { ...base, id: 'late', label: 'Period late', daysLate: diff(today, cur.nextStart) };
   if (within(today, cur.possible)) return { ...base, id: 'fertile', label: 'Fertile window', peak: within(today, cur.peak) };
   if (diff(cur.possible[0], today) > 0) return { ...base, id: 'follicular', label: 'Follicular phase' };
@@ -140,7 +153,7 @@ function notesFor(cyc, cur, today, spread) {
 export function dayInfo(date, pred, periods, days) {
   const info = { date, logged: false, flow: (days && days[date] && days[date].flow) || null };
   for (const p of livePeriods(periods)) {
-    const end = p.end && isDate(p.end) ? p.end : (pred.empty ? p.start : (p === pred.lastPeriod ? addDays(p.start, pred.periodLen - 1) : p.start));
+    const end = p.end && isDate(p.end) ? p.end : (pred.empty ? p.start : (p.id === pred.lastPeriod.id ? periodEnd(p, pred.periodLen, days || {}) : p.start));
     if (within(date, [p.start, end])) { info.logged = true; info.periodId = p.id; info.periodOpen = !p.end; break; }
   }
   if (pred.empty) return info;
