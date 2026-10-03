@@ -16,7 +16,7 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
 { const d = base(); d.periods[1].end = '2026-10-06'; eq('R3 logged 8-day period → doctor', ids(run(d, '2026-10-07')), ['long']); }
 { const d = base(); d.periods[1].end = '2026-10-05'; eq('R3 7-day period → no flag', ids(run(d, '2026-10-07')), []); }
 { const d = base(); d.days['2026-10-06'] = { flow: 'medium' }; eq('R3 open period, bleeding on day 8 → doctor', ids(run(d, '2026-10-06')), ['long']); }
-{ const d = base(); for (const x of ['2026-10-04', '2026-10-05', '2026-10-06']) d.days[x] = { flow: 'light' }; d.days['2026-10-12'] = { flow: 'spotting' }; eq('open period continuing, no "None" logged → long only', ids(run(d, '2026-10-12')), ['long']); }
+{ const d = base(); for (const x of ['2026-10-04', '2026-10-05', '2026-10-06']) d.days[x] = { flow: 'light' }; d.days['2026-10-12'] = { flow: 'spotting' }; eq('open period continuing → long; spotting 6 days later → between', ids(run(d, '2026-10-12')), ['long', 'between']); }
 { const d = base(); d.days['2026-10-04'] = { flow: 'none' }; d.days['2026-10-06'] = { flow: 'spotting' }; eq('open period, "None" logged, then spotting → between only', ids(run(d, '2026-10-06')), ['between']); }
 { const d = base(); d.checkins['2026-09-30'] = { clots: true }; eq('R4 clots ≥2.5 cm → doctor', ids(run(d, '2026-10-01')), ['clots']); }
 { const d = base(); d.periods[1].end = '2026-10-02'; d.days['2026-10-12'] = { flow: 'spotting' }; eq('R6 spotting between periods → doctor', ids(run(d, '2026-10-13')), ['between']); }

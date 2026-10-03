@@ -62,7 +62,10 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 {
   const ps = P('2026-01-01', '2026-01-29', '2026-04-15', '2026-05-13', '2026-06-10');
   const r = predict(ps, {}, '2026-06-12');
-  eq('a 76-day cycle is inside 10–90 and is used: (28, 76, 28, 28) → 40', r.cycleLen, 40);
+  eq('D1: 76 days > 2 × 28 → suspected missed period, left out → 28', [r.cycleLen, r.notes.some((n) => n.kind === 'missed')], [28, true]);
+  ps[1].confirmedLong = true;
+  eq('D1: once confirmed, the 76-day cycle is used → 40', predict(ps, {}, '2026-06-12').cycleLen, 40);
+  ps[1].confirmedLong = false;
   ps[1].excluded = true;
   const r2 = predict(ps, {}, '2026-06-12');
   eq('excluding the 76-day cycle → 28', r2.cycleLen, 28);
@@ -127,7 +130,18 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   const days = { '2026-10-03': { flow: 'medium' }, '2026-10-04': { flow: 'light' } };
   eq('day 6 with bleeding logged → period, not follicular', predict(ps, {}, '2026-10-04', days).state.id, 'menstruation');
   eq('calendar shows 4 Oct as period', dayInfo('2026-10-04', predict(ps, {}, '2026-10-04', days), ps, days).logged, true);
+  eq('bleeding 7 days after the period with nothing logged between → not the same period', predict(ps, {}, '2026-10-10', { '2026-10-10': { flow: 'light' } }).state.id === 'menstruation', false);
   eq('explicit "none" ends it', predict(ps, {}, '2026-10-05', { ...days, '2026-10-05': { flow: 'none' } }).state.id, 'follicular');
+}
+
+// 15. D1 boundaries
+{
+  const r = predict(P('2026-01-01', '2026-01-29', '2026-02-26', '2026-04-23'), {}, '2026-04-25');
+  eq('D1: 56 days = exactly 2 × 28 → not suspected', r.notes.some((n) => n.kind === 'missed'), false);
+  const r2 = predict(P('2026-01-01', '2026-01-29', '2026-03-27'), {}, '2026-03-29');
+  eq('D1: needs at least 2 other cycles', r2.notes.some((n) => n.kind === 'missed'), false);
+  const r3 = predict(P('2026-01-01', '2026-03-01', '2026-03-29', '2026-04-26'), {}, '2026-04-28');
+  eq('D1: an old long cycle (59 vs 28, 28) is suspected too', [r3.notes.filter((n) => n.kind === 'missed').length, r3.cycleLen], [1, 28]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

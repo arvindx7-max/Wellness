@@ -1,4 +1,4 @@
-// Cycle — v2 (Phases 1–3). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v2.1 (Phases 1–3 + login and recovery fixes, D1). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
@@ -6,7 +6,7 @@ import * as C from './cloud.js';
 import * as T from './content.js';
 import { evaluate, recsFor, heavyDays } from './rules.js';
 
-export const VERSION = 'v2';
+export const VERSION = 'v2.1';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -74,12 +74,22 @@ function render() {
   else if (S.view === 'faceid') app.innerHTML = faceIdOfferView();
   else if (S.view === 'restore') app.innerHTML = restoreView();
   else if (S.view === 'locked') app.innerHTML = lockedView();
+  else if (S.view === 'forgot') app.innerHTML = forgotView();
+  else if (S.view === 'import') app.innerHTML = importView();
+  else if (S.view === 'erase') app.innerHTML = eraseView();
   else if (S.view === 'app') {
     app.innerHTML = `<main class="screen">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
   if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true">${sheetBody()}</div>`; sh.hidden = false; }
   else { sh.hidden = true; sh.innerHTML = ''; }
+}
+
+// ---------------- passphrase fields ----------------
+// A username field lets the iPhone save the passphrase in Passwords (iCloud Keychain) and fill it in later.
+const USER = '<input class="sr-only" type="text" name="username" autocomplete="username" value="Cycle passphrase" readonly tabindex="-1" aria-hidden="true">';
+function pw(name, labelText, ac, focus = false, min = 10) {
+  return `<label>${labelText}<span class="pw"><input type="password" name="${name}" ${min ? `minlength="${min}"` : ''} required autocomplete="${ac}" ${focus ? 'autofocus' : ''}><button type="button" class="pw-eye" data-act="pw-toggle" aria-label="Show passphrase">Show</button></span></label>`;
 }
 
 // ---------------- first run ----------------
@@ -89,8 +99,8 @@ function welcomeView() {
     <h1>Cycle</h1>
     <p class="lede">A private tracker for your periods and fertile days. Everything stays encrypted on your phone and, if you choose, in your own Google Drive.</p>
     <button class="btn primary wide" data-act="start">Set up on this phone</button>
-    <button class="btn wide" data-act="restore-start" ${cfg.googleClientId ? '' : 'disabled'}>I already use Cycle on another device</button>
-    ${cfg.googleClientId ? '' : '<p class="fine">Restoring from another device needs Google sync, which is not set up for this copy of the app yet.</p>'}
+    <button class="btn wide" data-act="restore-start" ${cfg.googleClientId ? '' : 'disabled'}>Restore from Google Drive</button>
+    <div class="notice"><p><strong>Used Cycle before on this iPhone?</strong> The Home Screen app and Safari keep separate data. If you set Cycle up from the Home Screen icon, open it from there; if you used it in Safari, open it in Safari. Setting up here creates a new, empty Cycle.</p></div>
   </section>`;
 }
 function onboardView() {
@@ -121,10 +131,11 @@ function passphraseView() {
   return `<section class="intro form-page">
     <h1>Choose a passphrase</h1>
     <p class="lede">It encrypts everything Cycle stores. Use at least 10 characters, for example three random words.</p>
-    <form class="stack" data-form="passphrase">
-      <label>Passphrase<input type="password" name="p1" minlength="10" required autocomplete="new-password" autofocus></label>
-      <label>Repeat it<input type="password" name="p2" minlength="10" required autocomplete="new-password"></label>
-      <p class="fine">Write it down and keep it safe. It cannot be recovered: without it, your data cannot be opened by you or anyone else.</p>
+    <form class="stack" data-form="passphrase">${USER}
+      ${pw('p1', 'Passphrase', 'new-password', true)}
+      ${pw('p2', 'Repeat it', 'new-password')}
+      <p class="fine">When your iPhone offers to save it in Passwords, choose Save. Also write it down. It cannot be recovered: without it, your data cannot be opened by you or anyone else.</p>
+      <label class="choice"><input type="checkbox" name="saved" required> I have saved my passphrase</label>
       <button class="btn primary wide">Encrypt and continue</button>
     </form></section>`;
 }
@@ -142,8 +153,36 @@ function restoreView() {
   if (!st.token) body = `<p class="lede">Sign in with the Google account where Cycle keeps its encrypted vault.</p><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
   else if (!st.fileId) body = `<p class="lede">No Cycle vault was found in this Google account. Set Cycle up on the other device first, with sync turned on.</p><button class="btn wide" data-act="restore-retry">Search again</button>`;
   else body = `<p class="lede">Vault found. Enter its passphrase to bring your data to this device.</p>
-    <form class="stack" data-form="restore"><label>Passphrase<input type="password" name="p" required autocomplete="current-password" autofocus></label><button class="btn primary wide">Unlock and restore</button></form>`;
+    <form class="stack" data-form="restore">${USER}${pw('p', 'Vault passphrase', 'current-password', true, 0)}<button class="btn primary wide">Unlock and restore</button></form>
+    ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}`;
   return `<section class="intro form-page"><h1>Restore from Google Drive</h1>${body}<button class="link" data-act="restore-cancel">Back</button></section>`;
+}
+// ---------------- B1: forgot passphrase ----------------
+function forgotView() {
+  return `<section class="intro form-page"><h1>Forgot your passphrase?</h1>
+    <p class="lede">The passphrase cannot be recovered or reset, by you or anyone else. That is what keeps your data private. You can still get going again:</p>
+    <div class="notice"><p><strong>First, check the other place.</strong> If you set Cycle up from the Home Screen icon, open it from there; if you used Safari, open it in Safari. Your older data may be there, under your older passphrase.</p></div>
+    ${cfg.googleClientId ? '<button class="btn wide" data-act="restore-start">Restore from Google Drive</button><p class="fine">Needs the passphrase of your Drive vault.</p>' : ''}
+    <button class="btn wide" data-act="import-start">Start again from a backup file</button><p class="fine">Uses a backup you exported earlier; you choose a new passphrase.</p>
+    <button class="btn danger wide" data-act="erase-start">Erase Cycle on this device and start over</button><p class="fine">Removes only Cycle's data on this device. Your Finances app and your Google Drive are not touched.</p>
+    <button class="link" data-act="back-locked">Back</button></section>`;
+}
+function importView() {
+  return `<section class="intro form-page"><h1>Start again from a backup</h1>
+    <form class="stack" data-form="import-new">${USER}
+      <label>Backup file<input type="file" name="file" accept="application/json,.json" required></label>
+      ${pw('p1', 'New passphrase', 'new-password')}${pw('p2', 'Repeat it', 'new-password')}
+      <label class="choice"><input type="checkbox" name="saved" required> I have saved my new passphrase</label>
+      <p class="fine">This replaces the locked Cycle data on this device.</p>
+      <button class="btn primary wide">Restore backup</button></form>
+    <button class="link" data-act="forgot">Back</button></section>`;
+}
+function eraseView() {
+  return `<section class="intro form-page"><h1>Erase Cycle on this device?</h1>
+    <p class="lede">All Cycle data on this device is deleted for good. Your Finances app and your Google Drive vault stay as they are.</p>
+    <form class="stack" data-form="erase"><label>Type ERASE to confirm<input type="text" name="confirm" autocomplete="off" autocapitalize="characters" required></label>
+      <button class="btn danger wide">Erase and start over</button></form>
+    <button class="link" data-act="forgot">Back</button></section>`;
 }
 function lockedView() {
   const fid = S.meta && S.meta.lock;
@@ -151,7 +190,8 @@ function lockedView() {
     ${ringMark()}
     <h1>Cycle is locked</h1>
     ${fid && S.faceIdOk ? '<button class="btn primary wide" data-act="unlock-faceid">Unlock with Face ID</button><p class="fine center">or use your passphrase</p>' : ''}
-    <form class="stack" data-form="unlock"><label>Passphrase<input type="password" name="p" required autocomplete="current-password" ${fid ? '' : 'autofocus'}></label><button class="btn ${fid && S.faceIdOk ? '' : 'primary'} wide">Unlock</button></form>
+    <form class="stack" data-form="unlock">${USER}${pw('p', 'Passphrase', 'current-password', !fid, 0)}<button class="btn ${fid && S.faceIdOk ? '' : 'primary'} wide">Unlock</button></form>
+    <button class="link" data-act="forgot">Forgot passphrase?</button>
   </section>`;
 }
 const ringMark = () => `<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="24" fill="none" stroke="var(--heather-soft)" stroke-width="8"/><path d="M32 8 A24 24 0 0 1 52.8 20" fill="none" stroke="var(--rosehip)" stroke-width="8" stroke-linecap="round"/><path d="M55 38 A24 24 0 0 1 44 52.8" fill="none" stroke="var(--tide)" stroke-width="8" stroke-linecap="round"/></svg>`;
@@ -277,7 +317,8 @@ function checkinSheet(date) {
 
 function noteCard(n) {
   const btn = n.kind === 'late' ? '<button class="btn" data-act="add-past">Add an earlier start date</button>'
-    : n.kind === 'check' ? '<button class="btn" data-tab="history">Review in History</button>' : '';
+    : n.kind === 'check' ? '<button class="btn" data-tab="history">Review in History</button>'
+    : n.kind === 'missed' ? `<div class="row"><button class="btn" data-act="add-past">Add the missed period</button><button class="btn" data-act="confirm-long" data-id="${n.periodId}">The length is right</button></div>` : '';
   return `<section class="note ${n.kind}"><p>${h(n.text)}</p>${btn}</section>`;
 }
 
@@ -365,6 +406,7 @@ function calendarView() {
 function historyView() {
   const ps = livePeriods(S.data.periods).slice().reverse();
   const cyc = cycles(S.data.periods); const cycBy = Object.fromEntries(cyc.map((c) => [c.start, c]));
+  const suspects = new Set((S.pred && !S.pred.empty ? S.pred.notes : []).filter((n) => n.kind === 'missed').map((n) => n.cycleStart));
   const p = S.pred;
   const stats = p && !p.empty ? `<section class="card stats">
       <div><span class="big">${p.cycleLen}</span><span class="cap">days, average cycle</span></div>
@@ -374,7 +416,7 @@ function historyView() {
   const rows = ps.map((x) => {
     const c = cycBy[x.start]; const len = periodLength(x);
     return `<li class="hist ${x.excluded ? 'excl' : ''}"><div><strong>${fmt(x.start, true)}${x.end ? ` to ${fmt(x.end)}` : ''}</strong>
-      <span class="fine">${len ? `${plural(len, 'day')} of bleeding` : 'End not logged'}${c ? `; cycle ${c.length} days${c.valid ? '' : ' (not used: check this)'}` : '; current cycle'}${x.excluded ? `; excluded${x.excludeReason ? ` (${h(x.excludeReason)})` : ''}` : ''}</span></div>
+      <span class="fine">${len ? `${plural(len, 'day')} of bleeding` : 'End not logged'}${c ? `; cycle ${c.length} days${!c.valid ? ' (not used: check this)' : suspects.has(c.start) ? ' (possible missed period, not used)' : ''}` : '; current cycle'}${x.excluded ? `; excluded${x.excludeReason ? ` (${h(x.excludeReason)})` : ''}` : ''}</span></div>
       <button class="btn small" data-act="edit-period" data-id="${x.id}">Edit</button></li>`;
   }).join('');
   return `${topbar('History')}${stats}
@@ -402,6 +444,10 @@ function settingsView() {
         : '<p class="fine">Face ID is not available in this browser. Cycle opens with your passphrase.</p>'}
     <p class="fine">Cycle locks itself after 5 minutes in the background.</p>
     <button class="btn" data-act="lock-now">Lock now</button></section>
+  <section class="card"><h2>Change passphrase</h2>
+    <form class="stack" data-form="change-pass">${USER}${pw('cur', 'Current passphrase', 'current-password', false, 0)}${pw('p1', 'New passphrase', 'new-password')}${pw('p2', 'Repeat new passphrase', 'new-password')}
+      <p class="fine">Changes it on this device${S.meta.cloud && S.meta.cloud.fileId ? ' and in your Google Drive vault. Your other devices will ask for the new passphrase once' : ''}.${S.meta.lock ? ' Face ID needs to be turned on again afterwards.' : ''}</p>
+      <button class="btn">Change passphrase</button></form></section>
   ${syncCard()}
   <section class="card"><h2>Your data</h2>
     <p class="fine">A backup file is not encrypted. Keep it somewhere private.</p>
@@ -423,7 +469,12 @@ function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
   const c = S.cloud, m = S.meta.cloud;
   let body;
-  if (!m || !m.fileId) body = tokenOk()
+  if (c.existing) body = `<p class="fine">A Cycle vault already exists in this Google Drive. Join it instead of creating a second one: enter that vault's passphrase. The data on this device is merged into it, and this device switches to the vault's passphrase.</p>
+    <form class="stack" data-form="vault-join">${USER}${pw('p', "Vault's passphrase", 'current-password', false, 0)}<button class="btn primary">Join vault</button></form>
+    <p class="fine">Don't know that passphrase any more? Delete ${C.VAULT_NAME} in Google Drive first, then create a new vault here.</p><button class="link" data-act="vault-join-cancel">Cancel</button>`;
+  else if (m && m.fileId && c.status === 'newpass') body = `<p class="fine">The vault passphrase was changed on another device. Enter the new passphrase to keep syncing.</p>
+    <form class="stack" data-form="vault-newpass">${USER}${pw('p', 'New vault passphrase', 'current-password', false, 0)}<button class="btn primary">Unlock vault</button></form>`;
+  else if (!m || !m.fileId) body = tokenOk()
     ? '<p class="fine">Signed in. Create the encrypted vault in your Google Drive. It uses your Cycle passphrase.</p><button class="btn primary" data-act="vault-create">Create vault</button>'
     : '<p class="fine">Keep an encrypted copy in your own Google Drive, so your data survives a lost phone and appears on your other devices.</p><button class="btn primary" data-act="gsignin">Sign in with Google</button>';
   else if (!tokenOk()) body = `<p class="fine">Google sign-in lasts about an hour. Sign in again to sync${m.dirty ? '; your latest changes are waiting' : ''}.</p><button class="btn primary" data-act="gsignin">Sign in again</button>`;
@@ -556,7 +607,14 @@ document.addEventListener('click', async (e) => {
   try {
     if (a === 'start') { S.view = 'onboard'; render(); }
     else if (a === 'restore-start') { S.restore = {}; S.view = 'restore'; render(); }
-    else if (a === 'restore-cancel') { S.view = 'welcome'; render(); }
+    else if (a === 'restore-cancel') { S.view = S.meta ? 'forgot' : 'welcome'; render(); }
+    else if (a === 'forgot') { S.view = 'forgot'; render(); }
+    else if (a === 'back-locked') { S.view = 'locked'; render(); }
+    else if (a === 'import-start') { S.view = 'import'; render(); }
+    else if (a === 'erase-start') { S.view = 'erase'; render(); }
+    else if (a === 'pw-toggle') { const inp = b.parentElement.querySelector('input'); const show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-label', show ? 'Hide passphrase' : 'Show passphrase'); }
+    else if (a === 'confirm-long') { const p = S.data.periods.find((x) => x.id === b.dataset.id); Object.assign(p, { confirmedLong: true, updatedAt: Date.now() }); await persist(); render(); toast('Cycle length confirmed'); }
+    else if (a === 'vault-join-cancel') { S.cloud.existing = null; render(); }
     else if (a === 'restore-signin') await signIn('restore');
     else if (a === 'restore-retry') await findForRestore();
     else if (a === 'faceid-skip') { S.view = 'app'; render(); }
@@ -585,10 +643,16 @@ document.addEventListener('click', async (e) => {
     else if (a === 'export-json') download(`cycle-backup-${today()}.json`, JSON.stringify(S.data, null, 1), 'application/json');
     else if (a === 'export-csv') download(`cycle-periods-${today()}.csv`, csv(), 'text/csv');
     else if (a === 'wipe') confirmSheet('Delete all data on this device?', 'Everything Cycle stores on this device is removed. Your Google Drive vault, if any, is not touched.', 'Delete everything', async () => {
-      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, view: 'welcome' }); render();
+      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
     }, true);
     else if (a === 'gsignin') await signIn('sync');
-    else if (a === 'vault-create') await cloudAction('Vault created', createVaultFlow);
+    else if (a === 'vault-create') {
+      busy(true, 'Checking Google Drive');
+      try { const files = await C.findVault(S.cloud.token.token); busy(false);
+        if (files.length) { S.cloud.existing = files[0]; render(); return; } }
+      catch (e) { busy(false); throw e; }
+      await cloudAction('Vault created', createVaultFlow);
+    }
     else if (a === 'sync-now') await syncNow();
     else if (a === 'disconnect') confirmSheet('Stop syncing this device?', 'Your data stays on this device and in Google Drive.', 'Disconnect', async () => {
       S.meta.cloud = null; await kvSet('meta', S.meta); closeSheet(); toast('Sync is off on this device');
@@ -632,6 +696,24 @@ document.addEventListener('submit', async (e) => {
       busy(true, 'Unlocking');
       const key = await K.deriveKey(fd.get('p'), S.meta.salt, S.meta.iter);
       S.data = upgrade(await K.open(await kvGet('sealed'), key)); S.key = key; afterUnlock();
+    } else if (kind === 'erase') {
+      if ((fd.get('confirm') || '').trim().toUpperCase() !== 'ERASE') { toast('Type ERASE to confirm.'); return; }
+      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render(); toast('Cycle was erased on this device');
+    } else if (kind === 'import-new') {
+      if (fd.get('p1') !== fd.get('p2')) { toast('The two passphrases are different.'); return; }
+      const inc = JSON.parse(await fd.get('file').text());
+      if (inc.app !== 'cycle' || !Array.isArray(inc.periods)) throw new Error('This file is not a Cycle backup.');
+      busy(true, 'Restoring');
+      const salt = K.newSalt(); S.key = await K.deriveKey(fd.get('p1'), salt); S.data = upgrade(inc);
+      S.meta = { salt, iter: K.ITER, created: new Date().toISOString(), lock: null, cloud: null };
+      await kvSet('meta', S.meta); await persist(); busy(false); S.view = S.faceIdOk ? 'faceid' : 'app'; render(); toast('Backup restored');
+    } else if (kind === 'change-pass') {
+      if (fd.get('p1') !== fd.get('p2')) { toast('The two new passphrases are different.'); return; }
+      busy(true, 'Changing passphrase'); await changePassphrase(fd.get('cur'), fd.get('p1')); busy(false); render(); toast('Passphrase changed');
+    } else if (kind === 'vault-join') {
+      busy(true, 'Joining vault'); await joinVault(fd.get('p')); busy(false); render(); toast('Joined your existing vault');
+    } else if (kind === 'vault-newpass') {
+      busy(true, 'Unlocking vault'); await joinVault(fd.get('p'), S.meta.cloud.fileId); busy(false); render(); toast('Sync is working again');
     } else if (kind === 'restore') {
       busy(true, 'Restoring');
       await restoreFlow(fd.get('p'));
@@ -642,7 +724,7 @@ document.addEventListener('submit', async (e) => {
       if (end && diff(end, start) < 0) { toast('The last day is before the first day.'); return; }
       const o = overlapping(start, end, id);
       if (o) { toast(`These days overlap the period starting ${fmt(o.start)}.`); return; }
-      if (id) Object.assign(S.data.periods.find((x) => x.id === id), { start, end, excluded: !!fd.get('excluded'), excludeReason: fd.get('excluded') ? fd.get('excludeReason') : '', updatedAt: Date.now() });
+      if (id) { const p = S.data.periods.find((x) => x.id === id); Object.assign(p, { start, end, excluded: !!fd.get('excluded'), excludeReason: fd.get('excluded') ? fd.get('excludeReason') : '', confirmedLong: p.start === start ? !!p.confirmedLong : false, updatedAt: Date.now() }); }
       else S.data.periods.push({ id: uid(), start, end, updatedAt: Date.now() });
       await persist(); closeSheet(); toast('Period saved');
     } else if (kind === 'checkin') {
@@ -710,6 +792,29 @@ async function restoreFlow(pass) {
   await kvSet('meta', S.meta); await kvSet('sealed', await K.seal(S.data, S.key)); S.restore = null;
   busy(false); recompute(); S.view = S.faceIdOk ? 'faceid' : 'app'; render(); toast('Your data is on this device');
 }
+// Join an existing vault (B1) or follow a passphrase change made on another device.
+async function joinVault(pass, fileId) {
+  const tok = S.cloud.token.token; const id = fileId || S.cloud.existing.id;
+  const text = await C.download(tok, id); const head = C.vaultHeader(text);
+  const key = await K.deriveKey(pass, head.salt, head.iter);
+  const remote = await C.openVault(text, key);
+  S.data = upgrade(C.merge(S.data, remote)); S.key = key;
+  S.meta.salt = head.salt; S.meta.iter = head.iter; S.meta.lock = null;
+  S.meta.cloud = { fileId: id, remoteModified: null, lastSync: null, dirty: true };
+  S.cloud.existing = null; S.cloud.status = 'ok';
+  await kvSet('meta', S.meta); await persist(); await syncNow(true);
+}
+async function changePassphrase(cur, next) {
+  const oldKey = await K.deriveKey(cur, S.meta.salt, S.meta.iter);
+  await K.open(await kvGet('sealed'), oldKey, 'The current passphrase is not right.');
+  const salt = K.newSalt(); S.key = await K.deriveKey(next, salt);
+  S.meta.salt = salt; S.meta.iter = K.ITER; S.meta.lock = null;
+  await kvSet('meta', S.meta); await kvSet('sealed', await K.seal(S.data, S.key));
+  if (S.meta.cloud && S.meta.cloud.fileId && tokenOk()) {
+    const res = await C.updateVault(S.cloud.token.token, S.meta.cloud.fileId, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
+    S.meta.cloud.remoteModified = res.modifiedTime; S.meta.cloud.dirty = false; await kvSet('meta', S.meta);
+  } else if (S.meta.cloud && S.meta.cloud.fileId) { S.meta.cloud.dirty = true; await kvSet('meta', S.meta); }
+}
 async function createVaultFlow() {
   const res = await C.createVault(S.cloud.token.token, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
   S.meta.cloud = { fileId: res.id, remoteModified: res.modifiedTime, lastSync: new Date().toISOString(), dirty: false };
@@ -727,14 +832,16 @@ function markChanged() {
   clearTimeout(pushTimer); pushTimer = setTimeout(() => syncNow(true), 1500);
 }
 async function syncNow(quiet = false) {
-  if (!cloudReady() || S.cloud.busy) return;
+  if (!cloudReady() || S.cloud.busy || S.cloud.status === 'newpass') return;
   if (!tokenOk()) { if (!quiet) toast('Sign in with Google to sync.'); render(); return; }
   S.cloud.busy = true; if (!quiet) render();
   const tok = S.cloud.token.token, m = S.meta.cloud;
   try {
     const fm = await C.fileMeta(tok, m.fileId);
     if (fm.modifiedTime !== m.remoteModified) {
-      const remote = await C.openVault(await C.download(tok, m.fileId), S.key);
+      const text = await C.download(tok, m.fileId); const head = C.vaultHeader(text);
+      if (head.salt !== S.meta.salt) { S.cloud.status = 'newpass'; S.cloud.msg = ''; return; } // passphrase changed elsewhere
+      const remote = await C.openVault(text, S.key);
       const merged = upgrade(C.merge(S.data, remote));
       const changedHere = JSON.stringify(merged) !== JSON.stringify(upgrade(C.merge(remote, remote)));
       S.data = merged; await kvSet('sealed', await K.seal(S.data, S.key)); recompute();
@@ -769,7 +876,7 @@ function csv() {
   S.cloud.token = await kvGet('gtoken');
   const red = C.readRedirect();
   if (red && red.token) { S.cloud.token = { token: red.token, exp: red.exp }; await kvSet('gtoken', S.cloud.token); }
-  if (!S.meta) {
+  if (!S.meta || (red && red.next === 'restore')) {
     if (red && red.next === 'restore') { S.restore = { token: red.token ? S.cloud.token : null }; S.view = 'restore'; if (red.token) { try { await findForRestore(); } catch (e) { toast(e.message); } } }
     else S.view = 'welcome';
   } else { S.view = 'locked'; if (red && red.next === 'sync') S.tab = 'settings'; }

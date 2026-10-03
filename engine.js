@@ -17,6 +17,8 @@ export const CONST = {
   NORMAL_MIN: 24,      // FIGO 2018 normal frequency 24–38 days
   NORMAL_MAX: 38,
   MEDIUM_FROM: 3,      // completed cycles needed for "Medium" confidence (spec 3.5)
+  MAX_GAP: 2,          // open period: at most 2 unlogged days between bleeding days still count as the same period (design parameter)
+  SUSPECT_FACTOR: 2,   // D1: "Did you miss a period?" when a cycle is more than twice her average (approved 3 Oct)
 };
 
 // ---------- date helpers ----------
@@ -40,24 +42,34 @@ function sd(a) { // sample standard deviation
 // ---------- cycles ----------
 export const livePeriods = (periods) => (periods || []).filter((p) => !p.deleted && isDate(p.start)).sort((a, b) => diff(a.start, b.start));
 
+// D1 (approved 3 Oct): a cycle more than twice as long as her other cycles' average is probably a missed
+// period. It is left out of predictions until she adds the missed period, excludes it, or confirms it.
+export function markSuspects(cyc) {
+  const ok = cyc.filter((c) => c.valid && !c.excluded);
+  for (const c of ok) {
+    const others = ok.filter((o) => o !== c).slice(-CONST.WINDOW).map((o) => o.length);
+    if (others.length >= 2 && !c.confirmed && c.length > CONST.SUSPECT_FACTOR * mean(others)) { c.suspect = true; c.othersAvg = Math.round(mean(others)); }
+  }
+  return cyc;
+}
 // Completed cycles: from one period start to the next. A cycle is excluded when she marks its starting period.
 export function cycles(periods) {
   const ps = livePeriods(periods); const out = [];
   for (let i = 0; i < ps.length - 1; i++) {
     const length = diff(ps[i + 1].start, ps[i].start);
     out.push({ start: ps[i].start, next: ps[i + 1].start, length, periodId: ps[i].id,
-      excluded: !!ps[i].excluded, valid: length >= CONST.VALID_MIN && length <= CONST.VALID_MAX });
+      excluded: !!ps[i].excluded, confirmed: !!ps[i].confirmedLong, valid: length >= CONST.VALID_MIN && length <= CONST.VALID_MAX });
   }
   return out;
 }
 
 // End of a period: the logged end, or for an open period the predicted length extended through later
-// logged bleeding. Unlogged days count as unknown; an explicit "none" stops it; capped at 15 days.
+// logged bleeding. Up to MAX_GAP unlogged days may sit in between; an explicit "none" stops it; capped at 15 days.
 const BLEED = ['spotting', 'light', 'medium', 'heavy'];
 export function periodEnd(p, periodLen, days = {}) {
   if (p.end && isDate(p.end)) return p.end;
   let end = addDays(p.start, periodLen - 1);
-  for (let d = addDays(end, 1); diff(d, p.start) < 15; d = addDays(d, 1)) {
+  for (let d = addDays(end, 1); diff(d, p.start) < 15 && diff(d, end) <= CONST.MAX_GAP + 1; d = addDays(d, 1)) {
     const f = days[d] && days[d].flow;
     if (f === 'none') break;
     if (BLEED.includes(f)) end = d;
@@ -71,7 +83,8 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
   const ps = livePeriods(periods);
   if (!ps.length) return { empty: true };
   const cyc = cycles(ps);
-  const used = cyc.filter((c) => !c.excluded && c.valid).slice(-CONST.WINDOW).map((c) => c.length);
+  markSuspects(cyc);
+  const used = cyc.filter((c) => !c.excluded && c.valid && !c.suspect).slice(-CONST.WINDOW).map((c) => c.length);
 
   const samples = [...used];
   const usual = Number(settings.usualCycle) || null;
@@ -137,7 +150,9 @@ function notesFor(cyc, cur, today, spread) {
   const notes = [];
   for (const c of cyc) if (!c.valid && !c.excluded) notes.push({ id: `check-${c.start}`, kind: 'check', cycleStart: c.start,
     text: `The cycle starting ${c.start} is ${c.length} days long. Did you miss logging a period? It is left out of predictions until you fix or confirm it.` });
-  const normal = cyc.filter((c) => c.valid && !c.excluded);
+  for (const c of cyc) if (c.suspect) notes.push({ id: `missed-${c.start}`, kind: 'missed', cycleStart: c.start, periodId: c.periodId,
+    text: `The cycle starting ${c.start} is ${c.length} days long, more than twice your usual ${c.othersAvg} days. Did you miss logging a period? It is left out of predictions until you add the missed period or confirm the length.` });
+  const normal = cyc.filter((c) => c.valid && !c.excluded && !c.suspect);
   const out = (c) => c.length < CONST.NORMAL_MIN || c.length > CONST.NORMAL_MAX;
   const a = normal[normal.length - 1], b = normal[normal.length - 2];
   if (a && b && out(a) && out(b)) notes.push({ id: 'doctor-range', kind: 'doctor',

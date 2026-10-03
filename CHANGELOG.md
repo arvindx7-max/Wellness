@@ -1,5 +1,17 @@
 # Cycle — change log
 
+## v2.1 — 3 Oct 2026 (login and recovery fixes for bug B1, plus D1)
+- "Forgot passphrase?" on the lock screen: restore from Google Drive, start again from a backup file,
+  or erase only Cycle's data on this device (Finances and Google Drive untouched).
+- Passphrase fields let the iPhone save the passphrase in Passwords; "Show" toggle; setup asks "I have saved my passphrase".
+- Welcome screen explains that the Home Screen app and Safari keep separate data.
+- Turning on sync looks for an existing vault first and offers to join it instead of creating a second one.
+- Change passphrase in Settings (device + Drive vault); other devices ask for the new passphrase once.
+- D1: a cycle more than twice her usual length asks "Did you miss a period?" and is left out until resolved.
+- Fixes: an open period now only continues through bleeding with at most 2 unlogged days in between
+  (mid-cycle spotting is asked about again); erasing Cycle also forgets the Google sign-in.
+- Tests: 54 engine, 25 warning-rule unit tests; 3 browser suites (v1, v2, v2.1) all pass.
+
 ## v2 — 3 Oct 2026 (Phases 2 + 3: symptoms, safety and nutrition)
 Requirements FR-12 to FR-17 (spec v0.3 Sections 5 and 6). Upload over v1; data carries over.
 

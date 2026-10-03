@@ -181,3 +181,9 @@ input[type=text], textarea { border: 1.5px solid var(--line); border-radius: 12p
 .tip { font-size: 14px; background: var(--heather-soft); border-radius: 10px; padding: 8px 10px; }
 .tabs button { font-size: 11px; }
 .flag ul { margin: 0 0 8px; padding-left: 20px; }
+
+/* v2.1: passphrase fields */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+.pw { position: relative; display: block; }
+.pw input { padding-right: 72px; }
+.pw-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--ink-2); font-weight: 600; padding: 8px 10px; cursor: pointer; min-height: 40px; }
