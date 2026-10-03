@@ -1,5 +1,17 @@
 # Cycle — change log
 
+## v2.2 — 3 Oct 2026 (B2 "not much information" fixes + iOS-style interface U1)
+- "Sharpen your predictions" card while fewer than 3 cycles are logged, explaining the wide ranges.
+- With Low confidence, later months show predicted periods only, no fertile bands.
+- Updates appear on the first open after an upload (network first, offline copy as fallback); version shown in Settings.
+- Laptop: two columns on Today; calendar and legend side by side.
+- Today: check-in card directly under the ring.
+- Phase card: what is happening in this phase, with sources (Bull 2019, ACOG, FIGO).
+- Food tab mid-cycle: "Coming up" preview of the next phase's foods.
+- U1 iOS-style interface: system grey background and true black in dark mode, inset grouped cards, SF type sizes,
+  iOS buttons, segmented control, switch, sheets with grab handle, translucent tab bar, Apple Health-like phase colours.
+- Tests: 58 engine and 25 warning-rule unit tests; 4 browser suites (incl. update delivery and laptop layout) pass.
+
 ## v2.1 — 3 Oct 2026 (login and recovery fixes for bug B1, plus D1)
 - "Forgot passphrase?" on the lock screen: restore from Google Drive, start again from a backup file,
   or erase only Cycle's data on this device (Finances and Google Drive untouched).

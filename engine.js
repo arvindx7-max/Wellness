@@ -175,6 +175,10 @@ export function dayInfo(date, pred, periods, days) {
   const late = pred.state && pred.state.id === 'late';
   for (const c of pred.cycles) {
     if (late && c.k > 0) continue; // period overdue: no forecasts for a cycle that has not started
+    if (pred.confidence === 'Low' && c.k > 0) { // B2: with little history, show only next periods, not later fertile bands
+      if (within(date, [c.start, addDays(c.start, pred.periodLen - 1)]) && diff(date, pred.today) > 0) { info.predictedPeriod = true; info.horizon = c.k; }
+      continue;
+    }
 
     if (c.k > 0 && within(date, [c.start, addDays(c.start, pred.periodLen - 1)]) && diff(date, pred.today) > 0) { info.predictedPeriod = true; info.horizon = c.k; }
     if (within(date, c.peak)) { info.fertile = 'peak'; info.horizon = c.k; }

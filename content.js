@@ -104,3 +104,12 @@ export const FOOD = {
 };
 FOOD.fertile = FOOD.follicular;
 export const HEAVY_IRON_NOTE = 'You logged heavy bleeding on 2 or more days this period. Ask your doctor whether an iron check is useful. Do not take iron supplements without a doctor: some people (for example with hemochromatosis) must avoid them.';
+
+// B2 item 6: what is happening in each phase (short, sourced).
+export const PHASE_INFO = {
+  menstruation: { title: 'Your period', text: 'The lining of the uterus is shed. Bleeding lasts about 4 days on average; up to 8 days is within the normal range.', src: [['Bull et al. 2019', 'https://www.nature.com/articles/s41746-019-0152-7'], ['FIGO 2018', 'https://obgyn.onlinelibrary.wiley.com/doi/10.1002/ijgo.12666']] },
+  follicular: { title: 'After your period', text: 'An egg is maturing in one of the ovaries. This part of the cycle varies most in length from cycle to cycle, which is why ovulation is hard to predict from dates alone.', src: [['Bull et al. 2019', 'https://www.nature.com/articles/s41746-019-0152-7']] },
+  fertile: { title: 'Fertile window', text: 'Pregnancy is possible from about 5 days before ovulation until the day after it, because sperm can survive for up to 5 days. Cycle estimates ovulation from your dates; it cannot see it.', src: [['ACOG: Fertility awareness', 'https://www.acog.org/womens-health/faqs/fertility-awareness-based-methods-of-family-planning'], ['Bull et al. 2019', 'https://www.nature.com/articles/s41746-019-0152-7']] },
+  luteal: { title: 'Before your period', text: 'After ovulation, this phase lasts about 12 days on average. In the days before a period many people notice PMS symptoms such as mood changes, bloating or breast tenderness.', src: [['Bull et al. 2019', 'https://www.nature.com/articles/s41746-019-0152-7'], ['ACOG: PMS', 'https://www.acog.org/womens-health/faqs/premenstrual-syndrome']] },
+  late: { title: 'Period late', text: 'Cycle lengths vary, and a period that comes a few days late now and then is common. If pregnancy is possible, a home test can tell you.', src: [['FIGO 2018', 'https://obgyn.onlinelibrary.wiley.com/doi/10.1002/ijgo.12666']] },
+};

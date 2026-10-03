@@ -144,5 +144,16 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('D1: an old long cycle (59 vs 28, 28) is suspected too', [r3.notes.filter((n) => n.kind === 'missed').length, r3.cycleLen], [1, 28]);
 }
 
+// 16. B2: with Low confidence, later cycles show the predicted period but no fertile band
+{
+  const ps = P('2026-09-23');
+  const r = predict(ps, { usualCycle: 30 }, '2026-10-03');
+  eq('Low: next predicted period shown (23 Oct)', dayInfo('2026-10-23', r, ps, {}).predictedPeriod, true);
+  eq('Low: next cycle fertile days hidden (30 Oct)', dayInfo('2026-10-30', r, ps, {}).fertile || null, null);
+  eq('Low: current cycle fertile days still shown (8 Oct)', !!dayInfo('2026-10-08', r, ps, {}).fertile, true);
+  const ps3 = P('2026-07-03', '2026-08-02', '2026-08-30', '2026-09-29');
+  eq('Medium: next cycle fertile days shown (12 Nov)', !!dayInfo('2026-11-12', predict(ps3, {}, '2026-10-03'), ps3, {}).fertile, true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

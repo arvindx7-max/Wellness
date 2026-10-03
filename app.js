@@ -1,4 +1,4 @@
-// Cycle — v2.1 (Phases 1–3 + login and recovery fixes, D1). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v2.2 (Phases 1–3, recovery, D1, B2 fixes, iOS-style UI). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
@@ -6,7 +6,7 @@ import * as C from './cloud.js';
 import * as T from './content.js';
 import { evaluate, recsFor, heavyDays } from './rules.js';
 
-export const VERSION = 'v2.1';
+export const VERSION = 'v2.2';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -78,10 +78,10 @@ function render() {
   else if (S.view === 'import') app.innerHTML = importView();
   else if (S.view === 'erase') app.innerHTML = eraseView();
   else if (S.view === 'app') {
-    app.innerHTML = `<main class="screen">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
+    app.innerHTML = `<main class="screen tab-${S.tab}">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
-  if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true">${sheetBody()}</div>`; sh.hidden = false; }
+  if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true"><div class="grabber" aria-hidden="true"></div>${sheetBody()}</div>`; sh.hidden = false; }
   else { sh.hidden = true; sh.innerHTML = ''; }
 }
 
@@ -194,7 +194,7 @@ function lockedView() {
     <button class="link" data-act="forgot">Forgot passphrase?</button>
   </section>`;
 }
-const ringMark = () => `<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="24" fill="none" stroke="var(--heather-soft)" stroke-width="8"/><path d="M32 8 A24 24 0 0 1 52.8 20" fill="none" stroke="var(--rosehip)" stroke-width="8" stroke-linecap="round"/><path d="M55 38 A24 24 0 0 1 44 52.8" fill="none" stroke="var(--tide)" stroke-width="8" stroke-linecap="round"/></svg>`;
+const ringMark = () => `<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="24" fill="none" stroke="var(--ring-base)" stroke-width="8"/><path d="M32 8 A24 24 0 0 1 52.8 20" fill="none" stroke="var(--period)" stroke-width="8" stroke-linecap="round"/><path d="M55 38 A24 24 0 0 1 44 52.8" fill="none" stroke="var(--fertile)" stroke-width="8" stroke-linecap="round"/></svg>`;
 
 // ---------------- Today (FR-06, FR-27, FR-29) ----------------
 function todayView() {
@@ -217,22 +217,42 @@ function todayView() {
     ? `<button class="btn primary" data-act="period-end" data-date="${t}">Period ended today</button><button class="btn" data-act="period-end-earlier">Ended on another day</button>`
     : st.id === 'menstruation' ? '' : `<button class="btn primary" data-act="period-start" data-date="${t}">Period started today</button><button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
   const flow = (S.data.days[t] || {}).flow || 'none';
+  const est = `<p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>`;
+  // One list of blocks; on a phone they stack in this order, on a laptop they split into two columns.
   return `${topbar('Today', `${weekday(t)}, ${fmt(t, true)}`)}
   ${flagCards()}
-  <section class="ring-block">
-    ${cycleRing(p)}
-    <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div>
-  </section>
-  ${fertileLine}
-  ${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}
-  <p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>
-  ${weekStrip(p)}
-  <div class="actions">${actions}</div>
-  <section class="card"><h2>Bleeding today</h2>
-    <div class="chips" role="radiogroup" aria-label="Bleeding today">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" role="radio" aria-checked="${flow === v}" data-act="flow" data-date="${t}" data-flow="${v}">${l}</button>`).join('')}</div></section>
-  ${checkinCard(t)}
-  ${foodTeaser()}
-  ${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}`;
+  <div class="today-grid">
+    <div class="col">
+      <section class="ring-block o1">${cycleRing(p)}
+        <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div></section>
+      <div class="o2">${fertileLine}${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
+      <div class="o4">${weekStrip(p)}</div>
+      <div class="actions o5">${actions}</div>
+      <section class="card o6"><h2>Bleeding today</h2>
+        <div class="chips" role="radiogroup" aria-label="Bleeding today">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" role="radio" aria-checked="${flow === v}" data-act="flow" data-date="${t}" data-flow="${v}">${l}</button>`).join('')}</div></section>
+    </div>
+    <div class="col">
+      <div class="o2">${sharpenCard(p)}</div>
+      <div class="o3">${checkinCard(t)}</div>
+      <div class="o8">${phaseCard(st.id)}</div>
+      <div class="o9">${foodTeaser()}</div>
+      <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
+    </div>
+  </div>`;
+}
+// B2 item 1: explain wide estimates and how to sharpen them
+function sharpenCard(p) {
+  if (p.usedCycles >= CONST.MEDIUM_FROM) return '';
+  const need = CONST.MEDIUM_FROM - p.usedCycles;
+  return `<section class="card sharpen"><h2>Sharpen your predictions</h2>
+    <p class="fine">Cycle has ${p.usedCycles ? `${plural(p.usedCycles, 'complete cycle')} of yours` : 'no complete cycle of yours yet'}, so it relies on ${p.usedDefault ? 'a typical 29-day cycle' : 'the cycle length you entered'} with a ±${p.spread}-day margin. That is why the ranges are wide. Add ${need === 1 ? 'one more past period' : `${need} more past periods`} with their first and last days, and the estimates narrow to your own rhythm.</p>
+    <button class="btn" data-act="add-past">Add a past period</button></section>`;
+}
+// B2 item 6: what is happening now
+function phaseCard(id) {
+  const info = T.PHASE_INFO[id]; if (!info) return '';
+  return `<section class="card phase"><h2>${h(info.title)}</h2><p>${h(info.text)}</p>
+    <p class="fine">Sources: ${info.src.map(([n, u]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${h(n)}</a>`).join('; ')}</p></section>`;
 }
 const WARNING = 'Calendar-based estimate. With typical use, fertility-awareness methods lead to 12–24 pregnancies per 100 women in the first year. This is not a reliable method of birth control: use contraception on any day if you want to avoid pregnancy.';
 const FLOWS = [['none', 'None'], ['spotting', 'Spotting'], ['light', 'Light'], ['medium', 'Medium'], ['heavy', 'Heavy']];
@@ -284,11 +304,20 @@ function foodView() {
     ${heavy ? `<p class="esc">${h(T.HEAVY_IRON_NOTE)}</p>` : ''}
     ${f.groups.map((g) => `<h3>${h(g.name)}</h3><ul class="foods">${g.items.map(([n, v]) => `<li><span>${h(n)}</span>${v ? `<b>${h(v)}</b>` : ''}</li>`).join('')}</ul>`).join('')}
     ${f.tips.map((t) => `<p class="tip">${h(t)}</p>`).join('')}
+    ${['follicular', 'fertile'].includes(show) || (show === 'follicular') ? comingUp() : ''}
     ${f.src.length ? `<p class="fine">Sources: ${f.src.map((s) => `<a href="${T.SRC[s].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[s].name)}</a>`).join('; ')}. Iron values per serving from the NIH table (USDA FoodData Central).</p>` : ''}
   </section>
   <p class="fine">Food lists leave out beef, pork and other red meat. Cycle gives no supplement doses; ask your doctor before taking any.</p>`;
 }
 
+// B2 item 7: mid-cycle, preview what comes next
+function comingUp() {
+  const p = S.pred; if (!p || p.empty) return '';
+  const lutealStart = addDays(p.possible[1], 1); const n = diff(lutealStart, today());
+  const when = n > 0 ? `in about ${plural(n, 'day')}` : 'soon';
+  return `<div class="next"><h3>Coming up ${when}: before your period</h3><p class="fine">${h(T.FOOD.luteal.title)}. ${h(T.FOOD.luteal.why)}</p>
+    <button class="btn small" data-act="foodtab" data-k="luteal">See those foods</button></div>`;
+}
 function checkinSheet(date) {
   const ph = phaseOn(date); const q = T.CHECKIN[ph]; const ci = S.data.checkins[date] || {}; const sy = ci.symptoms || {};
   const flow = (S.data.days[date] || {}).flow || 'none';
@@ -427,7 +456,7 @@ function historyView() {
 // ---------------- Settings (FR-10, FR-11, FR-27, NFR-13) ----------------
 function settingsView() {
   const s = S.data.settings;
-  return `${topbar('Settings')}
+  return `${topbar('Settings', `Cycle ${VERSION}`)}
   <section class="card"><h2>Your cycle</h2>
     <form class="stack" data-form="settings">
       <label>Usual cycle length, in days<input type="number" name="usualCycle" min="15" max="90" inputmode="numeric" placeholder="I don't know" value="${h(s.usualCycle || '')}"></label>
@@ -437,7 +466,7 @@ function settingsView() {
       <button class="btn">Save</button></form></section>
   <section class="card"><h2>Pregnancy-chance wording</h2>
     <p class="fine">Shows fertile days as "High" or "Higher chance of pregnancy", with a warning. No day is ever shown as safe.</p>
-    <label class="switch"><input type="checkbox" data-act="wording" ${s.wording ? 'checked' : ''}> Show pregnancy-chance wording</label></section>
+    <label class="switch"><span>Show pregnancy-chance wording</span><input type="checkbox" role="switch" data-act="wording" ${s.wording ? 'checked' : ''}></label></section>
   <section class="card"><h2>App lock</h2>
     ${S.meta.lock ? '<p class="fine">Face ID unlock is on for this device.</p><button class="btn" data-act="faceid-off">Turn off Face ID</button>'
       : S.faceIdOk ? '<p class="fine">Unlock with Face ID instead of typing your passphrase.</p><button class="btn" data-act="faceid-setup">Turn on Face ID</button>'
@@ -870,7 +899,11 @@ function csv() {
 
 // ---------------- boot ----------------
 (async () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    const had = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !S.key) location.reload(); else if (had) toast('Cycle was updated. Lock and reopen to load the new version.'); });
+  }
   try { S.faceIdOk = await Lock.available(); } catch { S.faceIdOk = false; }
   S.meta = await kvGet('meta');
   S.cloud.token = await kvGet('gtoken');
