@@ -18,7 +18,7 @@ export const CONST = {
   NORMAL_MAX: 38,
   MEDIUM_FROM: 3,      // completed cycles needed for "Medium" confidence (spec 3.5)
   MAX_GAP: 2,          // open period: at most 2 unlogged days between bleeding days still count as the same period (design parameter)
-  SUSPECT_FACTOR: 2,   // D1: "Did you miss a period?" when a cycle is more than twice her average (approved 3 Oct)
+  SUSPECT_FACTOR: 2,   // D1: "Did you miss a period?" when a cycle is more than twice the user's average (approved 3 Oct)
 };
 
 // ---------- date helpers ----------
@@ -42,8 +42,8 @@ function sd(a) { // sample standard deviation
 // ---------- cycles ----------
 export const livePeriods = (periods) => (periods || []).filter((p) => !p.deleted && isDate(p.start)).sort((a, b) => diff(a.start, b.start));
 
-// D1 (approved 3 Oct): a cycle more than twice as long as her other cycles' average is probably a missed
-// period. It is left out of predictions until she adds the missed period, excludes it, or confirms it.
+// D1 (approved 3 Oct): a cycle more than twice as long as the user's other cycles' average is probably a missed
+// period. It is left out of predictions until the user adds the missed period, excludes it, or confirms it.
 export function markSuspects(cyc) {
   const ok = cyc.filter((c) => c.valid && !c.excluded);
   for (const c of ok) {
@@ -52,7 +52,7 @@ export function markSuspects(cyc) {
   }
   return cyc;
 }
-// Completed cycles: from one period start to the next. A cycle is excluded when she marks its starting period.
+// Completed cycles: from one period start to the next. A cycle is excluded when the user marks its starting period.
 export function cycles(periods) {
   const ps = livePeriods(periods); const out = [];
   for (let i = 0; i < ps.length - 1; i++) {
@@ -88,7 +88,7 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
 
   const samples = [...used];
   const usual = Number(settings.usualCycle) || null;
-  if (used.length < CONST.MEDIUM_FROM && usual) samples.push(usual);   // 3.5: her cycles + onboarding value
+  if (used.length < CONST.MEDIUM_FROM && usual) samples.push(usual);   // 3.5: own cycles + onboarding value
   let usedDefault = false;
   if (!samples.length) { samples.push(CONST.DEFAULT_CYCLE); usedDefault = true; }
   const cycleLen = Math.round(mean(samples));

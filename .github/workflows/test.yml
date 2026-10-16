@@ -1,0 +1,27 @@
+name: Tests
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:unit
+      - run: npm run test:e2e
+        env:
+          BROWSERS: chromium,webkit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: test-results/
+          retention-days: 7
