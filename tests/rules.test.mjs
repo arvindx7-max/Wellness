@@ -23,7 +23,9 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
 { const d = base(); d.periods[1].end = '2026-10-02'; d.days['2026-10-01'] = { flow: 'heavy' }; eq('R6 not for bleeding inside the period', ids(run(d, '2026-10-13')), []); }
 { const d = base(); d.checkins['2026-08-31'] = { symptoms: { cramps: 3 } }; d.checkins['2026-09-30'] = { symptoms: { cramps: 3 } }; eq('R7 severe cramps 2 cycles in a row → doctor', ids(run(d, '2026-10-01')), ['cramps2']); }
 { const d = base(); d.checkins['2026-09-30'] = { symptoms: { cramps: 3 } }; eq('R7 one cycle only → no flag', ids(run(d, '2026-10-01')), []); }
-{ const d = base(); for (const x of ['2026-09-25', '2026-09-28', '2026-10-01']) d.checkins[x] = { symptoms: { low: 3 } }; const f = run(d, '2026-10-01'); eq('R9 severe low mood 3 days in 14 → support with helpline', [ids(f), f[0].text.includes('0800 111 0 111')], [['lowmood'], true]); }
+{ const d = base(); for (const x of ['2026-09-25', '2026-09-28', '2026-10-01']) d.checkins[x] = { symptoms: { low: 3 } }; const f = run(d, '2026-10-01'); eq('R9 severe low mood 3 days in 14 → support, neutral text without a saved line', [ids(f), f[0].phone, /crisis line/.test(f[0].text)], [['lowmood'], null, true]);
+  d.settings.helpline = { name: 'Test Support Line', number: '+00 000 000' }; const g = run(d, '2026-10-01');
+  eq('R9 with a saved support line → call button for that number only', [g[0].phone, g[0].label], ['+00000000', 'Call Test Support Line']); }
 { const d = base(); for (const x of ['2026-09-10', '2026-09-28', '2026-10-01']) d.checkins[x] = { symptoms: { low: 3 } }; eq('R9 only 2 in the last 14 days → no flag', ids(run(d, '2026-10-01')), []); }
 { const d = { periods: [{ id: 'a', start: '2026-01-01' }, { id: 'b', start: '2026-01-29' }, { id: 'c', start: '2026-03-12' }, { id: 'e', start: '2026-04-25' }], days: {}, checkins: {}, settings: {} };
   eq('R8 two cycles outside 24–38 → doctor', ids(run(d, '2026-04-27')), ['doctor-range']); }
@@ -35,4 +37,15 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
 { const r = recsFor({ symptoms: { fatigue: 2 } }, 'luteal'); eq('tiredness outside the period → no iron suggestion', r[0].text === NO_REC, true); }
 { const r = recsFor({ symptoms: { fatigue: 2 } }, 'menstruation'); eq('tiredness during the period → iron suggestion', r[0].src, 'mayoHmb'); }
 { const d = base(); d.days['2026-09-29'] = { flow: 'heavy' }; d.days['2026-09-30'] = { flow: 'heavy' }; eq('heavy days counted in current period', heavyDays(d, predict(d.periods, {}, '2026-10-01')), 2); }
+// P3: diet filter on the neutral catalogue
+{
+  const { FOOD, dietFilter } = await import('../content.js');
+  const names = (diet) => dietFilter(FOOD.menstruation.groups, diet).flatMap((g) => g.items.map((i) => i[0].split(',')[0]));
+  eq('diet all lists beef, chicken and fish', ['Beef', 'Chicken', 'Sardines'].every((n) => names('all').includes(n)), true);
+  eq('no red meat hides beef only', [names('noRedMeat').includes('Beef'), names('noRedMeat').includes('Chicken')], [false, true]);
+  eq('fish, no meat hides beef and chicken', [names('pescatarian').includes('Chicken'), names('pescatarian').includes('Oysters')], [false, true]);
+  eq('vegetarian keeps plants and eggs only', [names('vegetarian').some((n) => ['Beef', 'Chicken', 'Oysters'].includes(n)), names('vegetarian').includes('Egg')], [false, true]);
+}
+// P5: no country-specific wording left in the rules
+{ const fs = await import('fs'); const src = fs.readFileSync(new URL('../rules.js', import.meta.url), 'utf8'); eq('no euro coin or fixed helpline in rules.js', /euro|0800/.test(src), false); }
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

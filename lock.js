@@ -1,4 +1,4 @@
-// Face ID / Touch ID lock (FR-11) — same method as the Finances app v14.
+// Face ID / Touch ID lock (FR-11) — passkey with the PRF extension.
 // A passkey for this site with the PRF extension yields a secret only after your face or fingerprint
 // is verified. That secret wraps the data key, so without Face ID (or the passphrase) nothing opens.
 import { b64, unb64, seal, open, exportRaw, importRaw } from './crypto.js';

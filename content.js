@@ -69,12 +69,12 @@ export const FOOD = {
     title: 'Iron and vitamin C',
     why: 'Iron is the one nutrient you lose in menstrual blood. That is why women aged 19 to 50 need 18 mg of iron a day, compared with 8 mg for men.',
     groups: [
-      { name: 'Iron from fish and chicken (best absorbed)', items: [['Oysters, 3 oz', '8 mg'], ['Sardines, 3 oz', '2 mg'], ['Chicken, 3 oz', '1 mg'], ['Light tuna, 3 oz', '1 mg']] },
-      { name: 'Iron from plants and eggs', items: [['White beans, 1 cup', '8 mg'], ['Fortified breakfast cereal, 1 serving', 'up to 18 mg'], ['Lentils (dal), ½ cup', '3 mg'], ['Tofu, ½ cup', '3 mg'], ['Chickpeas (chana), ½ cup', '2 mg'], ['Kidney beans (rajma), ½ cup', '2 mg'], ['Egg, 1 large', '1 mg'], ['Spinach, ½ cup cooked', '3 mg, poorly absorbed']] },
+      { name: 'Iron from meat, poultry and fish (best absorbed)', items: [['Oysters, 3 oz', '8 mg', 'fish'], ['Beef, 3 oz', '2 mg', 'redmeat'], ['Sardines, 3 oz', '2 mg', 'fish'], ['Chicken, 3 oz', '1 mg', 'poultry'], ['Light tuna, 3 oz', '1 mg', 'fish']] },
+      { name: 'Iron from plants and eggs', items: [['White beans, 1 cup', '8 mg'], ['Fortified breakfast cereal, 1 serving', 'up to 18 mg'], ['Lentils (dal), ½ cup', '3 mg'], ['Tofu, ½ cup', '3 mg'], ['Chickpeas (chana), ½ cup', '2 mg'], ['Kidney beans (rajma), ½ cup', '2 mg'], ['Egg, 1 large', '1 mg', 'egg'], ['Spinach, ½ cup cooked', '3 mg, poorly absorbed']] },
       { name: 'Add vitamin C to the same meal', items: [['Lemon squeezed on dal', ''], ['Oranges and other citrus', ''], ['Strawberries', ''], ['Sweet peppers, tomatoes, broccoli', '']] },
     ],
     tips: [
-      'Fish, chicken and vitamin C help your body absorb iron from plants; phytate (in grains and beans) and some polyphenols reduce it. In a normal mixed diet these effects are small, so there is no need to time meals.',
+      'Meat, poultry, fish and vitamin C help your body absorb iron from plants; phytate (in grains and beans) and some polyphenols reduce it. In a normal mixed diet these effects are small, so there is no need to time meals.',
       'If you take calcium and iron supplements, take them at different times of day.',
     ],
     src: ['nihIron'],
@@ -113,3 +113,8 @@ export const PHASE_INFO = {
   luteal: { title: 'Before your period', text: 'After ovulation, this phase lasts about 12 days on average. In the days before a period many people notice PMS symptoms such as mood changes, bloating or breast tenderness.', src: [['Bull et al. 2019', 'https://www.nature.com/articles/s41746-019-0152-7'], ['ACOG: PMS', 'https://www.acog.org/womens-health/faqs/premenstrual-syndrome']] },
   late: { title: 'Period late', text: 'Cycle lengths vary, and a period that comes a few days late now and then is common. If pregnancy is possible, a home test can tell you.', src: [['FIGO 2018', 'https://obgyn.onlinelibrary.wiley.com/doi/10.1002/ijgo.12666']] },
 };
+
+// Diet setting (P3): the catalogue is neutral; each user's choice lives only in her encrypted data.
+export const DIETS = [['all', 'Everything'], ['noRedMeat', 'No red meat'], ['pescatarian', 'Fish, no meat'], ['vegetarian', 'Vegetarian']];
+const HIDE = { all: [], noRedMeat: ['redmeat'], pescatarian: ['redmeat', 'poultry'], vegetarian: ['redmeat', 'poultry', 'fish'] };
+export const dietFilter = (groups, diet) => groups.map((g) => ({ ...g, items: g.items.filter((it) => !(HIDE[diet] || []).includes(it[2])) })).filter((g) => g.items.length);

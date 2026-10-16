@@ -1,4 +1,4 @@
-// Cycle — v2.2 (Phases 1–3, recovery, D1, B2 fixes, iOS-style UI). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v2.3 (privacy onboarding fixes, adaptive layout B3, B4). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
@@ -6,7 +6,7 @@ import * as C from './cloud.js';
 import * as T from './content.js';
 import { evaluate, recsFor, heavyDays } from './rules.js';
 
-export const VERSION = 'v2.2';
+export const VERSION = 'v2.3';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -118,8 +118,11 @@ function onboardView() {
       <label>Usual period length, in days
         <input type="number" name="usualPeriod" min="1" max="15" inputmode="numeric" placeholder="I don't know" value="${h(d.usualPeriod || '')}"></label>
       <fieldset><legend>Your age</legend>
-        ${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<label class="choice"><input type="radio" name="ageBand" value="${v}" ${(d.ageBand || '26-41') === v ? 'checked' : ''}> ${t}</label>`).join('')}
+        ${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<label class="choice"><input type="radio" name="ageBand" value="${v}" ${d.ageBand === v ? 'checked' : ''} required ${''}> ${t}</label>`).join('')}
         <span class="fine">Used later to judge whether cycles are regular (FIGO 2018).</span></fieldset>
+      <fieldset><legend>Your diet</legend>
+        ${T.DIETS.map(([v, t]) => `<label class="choice"><input type="radio" name="diet" value="${v}" ${d.diet === v ? 'checked' : ''} required> ${t}</label>`).join('')}
+        <span class="fine">Only changes which foods the Food tab lists. You can change it in Settings.</span></fieldset>
       <div class="notice">
         <p><strong>Please read.</strong> Cycle is a wellness tracker, not medical advice. Its dates are estimates from your cycle lengths. It is not a reliable method of birth control.</p>
         <label class="choice"><input type="checkbox" name="accept" required> I understand</label>
@@ -164,7 +167,7 @@ function forgotView() {
     <div class="notice"><p><strong>First, check the other place.</strong> If you set Cycle up from the Home Screen icon, open it from there; if you used Safari, open it in Safari. Your older data may be there, under your older passphrase.</p></div>
     ${cfg.googleClientId ? '<button class="btn wide" data-act="restore-start">Restore from Google Drive</button><p class="fine">Needs the passphrase of your Drive vault.</p>' : ''}
     <button class="btn wide" data-act="import-start">Start again from a backup file</button><p class="fine">Uses a backup you exported earlier; you choose a new passphrase.</p>
-    <button class="btn danger wide" data-act="erase-start">Erase Cycle on this device and start over</button><p class="fine">Removes only Cycle's data on this device. Your Finances app and your Google Drive are not touched.</p>
+    <button class="btn danger wide" data-act="erase-start">Erase Cycle on this device and start over</button><p class="fine">Removes only Cycle's data on this device. Other apps on this device and your Google Drive are not touched.</p>
     <button class="link" data-act="back-locked">Back</button></section>`;
 }
 function importView() {
@@ -179,7 +182,7 @@ function importView() {
 }
 function eraseView() {
   return `<section class="intro form-page"><h1>Erase Cycle on this device?</h1>
-    <p class="lede">All Cycle data on this device is deleted for good. Your Finances app and your Google Drive vault stay as they are.</p>
+    <p class="lede">All Cycle data on this device is deleted for good. Other apps on this device and your Google Drive vault stay as they are.</p>
     <form class="stack" data-form="erase"><label>Type ERASE to confirm<input type="text" name="confirm" autocomplete="off" autocapitalize="characters" required></label>
       <button class="btn danger wide">Erase and start over</button></form>
     <button class="link" data-act="forgot">Back</button></section>`;
@@ -269,7 +272,7 @@ function flagCards() {
     <p class="fine">Source: <a href="${T.SRC.mayoHmb.url}" target="_blank" rel="noopener noreferrer">${h(T.SRC.mayoHmb.name)}</a></p>
     <button class="btn small" data-act="ack" data-id="${h(urgent.map((f) => f.id).join('|'))}">I have read this</button></section>` : '';
   return one + open.filter((f) => !(one && f.level === 'urgent')).map((f) => `<section class="flag ${f.level}" role="alert"><h2>${h(f.title)}</h2><p>${h(f.text)}</p>
-    ${f.phone ? `<a class="btn primary" href="tel:${f.phone}">Call 0800 111 0 111</a>` : ''}
+    ${f.phone ? `<a class="btn primary" href="tel:${h(f.phone)}">${h(f.label)}</a>` : ''}
     ${f.src ? `<p class="fine">Source: <a href="${T.SRC[f.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[f.src].name)}</a></p>` : ''}
     <button class="btn small" data-act="ack" data-id="${h(f.id)}">I have read this</button></section>`).join('');
 }
@@ -294,20 +297,27 @@ const phaseKey = (id) => (['menstruation', 'luteal', 'late', 'fertile', 'follicu
 
 function foodView() {
   const cur = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular';
-  const show = S.foodTab || cur;
+  const curKey = ['fertile', 'late'].includes(cur) ? 'follicular' : cur;
+  const show = S.foodTab || curKey;
   const tabs = [['menstruation', 'During your period'], ['follicular', 'Rest of the cycle'], ['luteal', 'Before your period']];
-  const f = T.FOOD[show];
-  const heavy = show === 'menstruation' && heavyDays(S.data, S.pred) >= 2;
+  const diet = S.data.settings.diet || 'all';
+  // B3: all three cards are rendered; on a phone only the selected one shows, on a wide screen all three sit side by side.
   return `${topbar('Food')}
-  <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${show === k || (k === 'follicular' && ['fertile', 'late'].includes(show))}" data-act="foodtab" data-k="${k}">${l}${phaseKey(cur) === k || (k === 'follicular' && ['fertile'].includes(cur)) ? ' (now)' : ''}</button>`).join('')}</div>
-  <section class="card"><h2>${h(f.title)}</h2><p>${h(f.why)}</p>
+  <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${show === k}" data-act="foodtab" data-k="${k}">${l}${curKey === k ? ' (now)' : ''}</button>`).join('')}</div>
+  ${S.data.settings.diet ? '' : '<section class="note missed"><p>Choose your diet in Settings so the lists only show foods you eat. Until then, all foods are listed.</p><button class="btn" data-tab="settings">Open Settings</button></section>'}
+  <div class="food-grid">${tabs.map(([k, l]) => foodCard(k, l, k === show, k === curKey, diet)).join('')}</div>
+  <p class="fine">Food lists follow your diet setting (${h((T.DIETS.find(([k]) => k === diet) || T.DIETS[0])[1])}). Cycle gives no supplement doses; ask your doctor before taking any.</p>`;
+}
+function foodCard(k, label, selected, now, diet) {
+  const f = { ...T.FOOD[k], groups: T.dietFilter(T.FOOD[k].groups, diet) };
+  const heavy = k === 'menstruation' && heavyDays(S.data, S.pred) >= 2;
+  return `<section class="card food-card ${selected ? 'sel' : ''}"><p class="phase-label">${h(label)}${now ? ' · now' : ''}</p><h2>${h(f.title)}</h2><p>${h(f.why)}</p>
     ${heavy ? `<p class="esc">${h(T.HEAVY_IRON_NOTE)}</p>` : ''}
     ${f.groups.map((g) => `<h3>${h(g.name)}</h3><ul class="foods">${g.items.map(([n, v]) => `<li><span>${h(n)}</span>${v ? `<b>${h(v)}</b>` : ''}</li>`).join('')}</ul>`).join('')}
     ${f.tips.map((t) => `<p class="tip">${h(t)}</p>`).join('')}
-    ${['follicular', 'fertile'].includes(show) || (show === 'follicular') ? comingUp() : ''}
-    ${f.src.length ? `<p class="fine">Sources: ${f.src.map((s) => `<a href="${T.SRC[s].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[s].name)}</a>`).join('; ')}. Iron values per serving from the NIH table (USDA FoodData Central).</p>` : ''}
-  </section>
-  <p class="fine">Food lists leave out beef, pork and other red meat. Cycle gives no supplement doses; ask your doctor before taking any.</p>`;
+    ${k === 'follicular' ? comingUp() : ''}
+    ${f.src.length ? `<p class="fine">Sources: ${f.src.map((x) => `<a href="${T.SRC[x].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[x].name)}</a>`).join('; ')}. Iron values per serving from the NIH table (USDA FoodData Central).</p>` : ''}
+  </section>`;
 }
 
 // B2 item 7: mid-cycle, preview what comes next
@@ -325,7 +335,7 @@ function checkinSheet(date) {
   const scale = (code) => `<fieldset class="q scale"><legend>${h(T.label(code))}</legend>${[0, 1, 2, 3].map((v) => `<label class="pick"><input type="radio" name="s_${code}" value="${v}" ${(sy[code] || 0) === v ? 'checked' : ''}><span>${v ? T.SEVERITY[v] : 'None'}</span></label>`).join('')}</fieldset>`;
   const asks = { flow: `<fieldset class="q"><legend>Bleeding</legend>${FLOWS.map(([v, l]) => `<label class="pick"><input type="radio" name="flow" value="${v}" ${flow === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</fieldset>`,
     change: `<fieldset class="q col"><legend>How often did you need to change your pad, tampon or cup?</legend>${T.CHANGE.map(([v, l]) => `<label class="pick"><input type="radio" name="change" value="${v}" ${ci.change === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}<label class="pick"><input type="radio" name="change" value="" ${!ci.change ? 'checked' : ''}><span>Not sure / not today</span></label></fieldset>`,
-    clots: yesno('clots', 'Any clots the size of a 2-euro coin (2.5 cm) or larger?'),
+    clots: yesno('clots', 'Any clots 2.5 cm across or larger?'),
     dizzy: yesno('dizzy', 'Feeling dizzy, faint, or a racing heart?'),
     discharge: `<fieldset class="q"><legend>Discharge</legend>${T.DISCHARGE.map(([v, l]) => `<label class="pick"><input type="radio" name="discharge" value="${v}" ${ci.discharge === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}<label class="pick"><input type="radio" name="discharge" value="" ${!ci.discharge ? 'checked' : ''}><span>Not noted</span></label></fieldset>`,
     sidepain: yesno('sidepain', 'Pain on one side of your lower belly?') };
@@ -448,25 +458,31 @@ function historyView() {
       <span class="fine">${len ? `${plural(len, 'day')} of bleeding` : 'End not logged'}${c ? `; cycle ${c.length} days${!c.valid ? ' (not used: check this)' : suspects.has(c.start) ? ' (possible missed period, not used)' : ''}` : '; current cycle'}${x.excluded ? `; excluded${x.excludeReason ? ` (${h(x.excludeReason)})` : ''}` : ''}</span></div>
       <button class="btn small" data-act="edit-period" data-id="${x.id}">Edit</button></li>`;
   }).join('');
-  return `${topbar('History')}${stats}
-    <button class="btn wide" data-act="add-past">Add a past period</button>
-    ${ps.length ? `<ul class="hist-list">${rows}</ul>` : '<p class="fine">No periods logged yet.</p>'}`;
+  return `${topbar('History')}<div class="hist-grid"><div class="hist-side">${stats}
+    <button class="btn wide" data-act="add-past">Add a past period</button></div>
+    <div class="hist-main">${ps.length ? `<ul class="hist-list">${rows}</ul>` : '<p class="fine">No periods logged yet.</p>'}</div></div>`;
 }
 
 // ---------------- Settings (FR-10, FR-11, FR-27, NFR-13) ----------------
 function settingsView() {
   const s = S.data.settings;
-  return `${topbar('Settings', `Cycle ${VERSION}`)}
+  return `${topbar('Settings', `Cycle ${VERSION}`)}<div class="settings-grid">
   <section class="card"><h2>Your cycle</h2>
     <form class="stack" data-form="settings">
       <label>Usual cycle length, in days<input type="number" name="usualCycle" min="15" max="90" inputmode="numeric" placeholder="I don't know" value="${h(s.usualCycle || '')}"></label>
       <label>Usual period length, in days<input type="number" name="usualPeriod" min="1" max="15" inputmode="numeric" placeholder="I don't know" value="${h(s.usualPeriod || '')}"></label>
-      <label>Age<select name="ageBand">${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<option value="${v}" ${s.ageBand === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Age<select name="ageBand">${s.ageBand ? '' : '<option value="" selected>Choose</option>'}${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<option value="${v}" ${s.ageBand === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Diet<select name="diet">${s.diet ? '' : '<option value="" selected>Choose</option>'}${T.DIETS.map(([v, t]) => `<option value="${v}" ${s.diet === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <p class="fine">Once you have 3 logged cycles, predictions use your own history and the usual lengths above no longer matter.</p>
       <button class="btn">Save</button></form></section>
   <section class="card"><h2>Pregnancy-chance wording</h2>
     <p class="fine">Shows fertile days as "High" or "Higher chance of pregnancy", with a warning. No day is ever shown as safe.</p>
     <label class="switch"><span>Show pregnancy-chance wording</span><input type="checkbox" role="switch" data-act="wording" ${s.wording ? 'checked' : ''}></label></section>
+  <section class="card"><h2>Support line</h2>
+    <p class="fine">A crisis or counselling line you would call. Cycle shows it on the low-mood card. It is stored only in your encrypted data.</p>
+    <form class="stack" data-form="helpline"><label>Name<input type="text" name="name" maxlength="40" value="${h((s.helpline || {}).name || '')}" placeholder="Optional"></label>
+      <label>Phone number<input type="tel" name="number" maxlength="25" inputmode="tel" value="${h((s.helpline || {}).number || '')}" placeholder="Not set"></label>
+      <button class="btn">Save</button></form></section>
   <section class="card"><h2>App lock</h2>
     ${S.meta.lock ? '<p class="fine">Face ID unlock is on for this device.</p><button class="btn" data-act="faceid-off">Turn off Face ID</button>'
       : S.faceIdOk ? '<p class="fine">Unlock with Face ID instead of typing your passphrase.</p><button class="btn" data-act="faceid-setup">Turn on Face ID</button>'
@@ -492,7 +508,7 @@ function settingsView() {
       <li>ACOG: 12–24 pregnancies per 100 women in the first year of typical fertility-awareness use</li>
       <li>ACOG, Mayo Clinic and CDC: suggestions for symptoms and the warning signs for heavy or unusual bleeding</li>
       <li>NIH Office of Dietary Supplements: iron needs, iron in foods, and what helps or reduces its absorption</li>
-    </ul></section>`;
+    </ul></section></div>`;
 }
 function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
@@ -524,7 +540,7 @@ function syncPill() {
 function navBar() {
   const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'], ['food', 'Food', '<path d="M12 21c-4.5 0-7-3.5-7-7.5C5 9 8 6 12 6s7 3 7 7.5c0 4-2.5 7.5-7 7.5z"/><path d="M12 6c0-1.6 1-3 2.5-3.5"/>'],
     ['history', 'History', '<path d="M5 6h14M5 12h14M5 18h9"/>'], ['settings', 'Settings', '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>']];
-  return `<nav class="tabs">${tabs.map(([id, l, ic]) => `<button data-tab="${id}" class="${S.tab === id ? 'on' : ''}" aria-current="${S.tab === id ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}</nav>`;
+  return `<nav class="tabs" aria-label="Sections"><div class="brand" aria-hidden="true">${ringMark()}<span>Cycle</span></div>${tabs.map(([id, l, ic]) => `<button data-tab="${id}" class="${S.tab === id ? 'on' : ''}" aria-current="${S.tab === id ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}</nav>`;
 }
 
 // ---------------- sheets ----------------
@@ -708,7 +724,7 @@ document.addEventListener('submit', async (e) => {
   try {
     if (kind === 'onboard') {
       const num = (k, lo, hi) => { const v = Number(fd.get(k)); return v >= lo && v <= hi ? v : null; };
-      S.draft = { last: fd.get('last'), usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand') };
+      S.draft = { last: fd.get('last'), usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand'), diet: fd.get('diet') };
       if (S.draft.last && diff(S.draft.last, today()) > 0) { toast('The last period cannot be in the future.'); return; }
       S.view = 'passphrase'; render();
     } else if (kind === 'passphrase') {
@@ -716,7 +732,7 @@ document.addEventListener('submit', async (e) => {
       busy(true, 'Encrypting');
       const salt = K.newSalt(); S.key = await K.deriveKey(fd.get('p1'), salt);
       const d = S.draft; S.data = fresh();
-      S.data.settings = { usualCycle: d.usualCycle, usualPeriod: d.usualPeriod, ageBand: d.ageBand, accepted: new Date().toISOString(), wording: false, updatedAt: Date.now() };
+      S.data.settings = { usualCycle: d.usualCycle, usualPeriod: d.usualPeriod, ageBand: d.ageBand, diet: d.diet, accepted: new Date().toISOString(), wording: false, updatedAt: Date.now() };
       if (d.last) S.data.periods.push({ id: uid(), start: d.last, updatedAt: Date.now() });
       S.meta = { salt, iter: K.ITER, created: new Date().toISOString(), lock: null, cloud: null };
       await kvSet('meta', S.meta); await persist(); S.draft = {};
@@ -773,8 +789,13 @@ document.addEventListener('submit', async (e) => {
     } else if (kind === 'end-earlier') await endPeriod(fd.get('end'));
     else if (kind === 'settings') {
       const num = (k, lo, hi) => { const v = Number(fd.get(k)); return v >= lo && v <= hi ? v : null; };
-      S.data.settings = { ...S.data.settings, usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand'), updatedAt: Date.now() };
+      S.data.settings = { ...S.data.settings, usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand') || null, diet: fd.get('diet') || null, updatedAt: Date.now() };
       await persist(); render(); toast('Saved');
+    } else if (kind === 'helpline') {
+      const number = (fd.get('number') || '').trim(); const name = (fd.get('name') || '').trim().slice(0, 40);
+      if (number && !/^[+0-9 ()/-]{3,25}$/.test(number)) { toast('Use digits, spaces and + only.'); return; }
+      S.data.settings = { ...S.data.settings, helpline: number ? { name, number } : null, updatedAt: Date.now() };
+      await persist(); render(); toast(number ? 'Support line saved' : 'Support line removed');
     }
   } catch (err) { busy(false); toast(err.message || 'Something went wrong.'); }
 });

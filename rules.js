@@ -11,6 +11,7 @@ const inRange = (d, [a, b]) => diff(d, a) >= 0 && diff(b, d) >= 0;
 
 export function evaluate(data, pred, today) {
   const flags = []; const days = data.days || {}; const ci = data.checkins || {};
+  const help = (data.settings && data.settings.helpline) || {}; // private setting, never built into the code
   const ps = livePeriods(data.periods);
   if (!ps.length || !pred || pred.empty) return flags;
   const last = ps[ps.length - 1]; const prev = ps[ps.length - 2];
@@ -39,7 +40,7 @@ export function evaluate(data, pred, today) {
 
   // R4: clots about 2.5 cm or larger (CDC)
   if (curDates.some((d) => ci[d] && ci[d].clots)) add('clots', 'doctor', 'See a doctor about large clots',
-    'You logged blood clots about the size of a 2-euro coin (2.5 cm) or larger.', 'cdcHmb');
+    'You logged blood clots 2.5 cm across or larger.', 'cdcHmb');
 
   // R6: bleeding between periods (Mayo Clinic)
   const between = curDates.filter((d) => days[d] && BLEED.includes(days[d].flow) && !inRange(d, lastRange));
@@ -57,7 +58,8 @@ export function evaluate(data, pred, today) {
   const lowDays = Object.entries(ci).filter(([d, v]) => diff(today, d) >= 0 && diff(today, d) < 14 && sev(v, 'low') >= 3).map(([d]) => d).sort();
   // acknowledged until a new severe low-mood day is logged
   if (lowDays.length >= 3) flags.push({ id: `lowmood@${lowDays[lowDays.length - 1]}`, level: 'support', title: 'You have logged very low mood on several days',
-    text: 'Please talk to a doctor or someone you trust. If you need to talk now, TelefonSeelsorge is free and open 24 hours: 0800 111 0 111.', src: null, phone: '08001110111' });
+    text: `Please talk to a doctor or someone you trust. ${help.number ? `If you need to talk now, call ${help.name || 'your support line'}: ${help.number}.` : 'If you need to talk now, contact a local crisis line or emergency services. You can save a support line number in Settings.'}`,
+    src: null, phone: help.number ? help.number.replace(/[^0-9+]/g, '') : null, label: help.number ? `Call ${help.name || help.number}` : null });
 
   // R8 (cycles outside 24–38 twice) comes from the engine as a 'doctor' note.
   for (const n of pred.notes.filter((x) => x.kind === 'doctor')) flags.push({ id: `${n.id}@${cycleId}`, level: 'doctor', title: 'Cycle length', text: n.text, src: 'figo' });

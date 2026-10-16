@@ -1,4 +1,4 @@
-/* Cycle v2.2 — iOS-style interface (U1). Follows Apple's Human Interface conventions: grouped inset cards,
+/* Cycle v2.3 — iOS-style interface (U1) with adaptive layouts (B3). Follows Apple's Human Interface conventions: grouped inset cards,
    system colours and type sizes, segmented controls, switches, sheets and a translucent tab bar.
    Colours always come with a label or symbol (NFR-10). */
 :root {
@@ -62,7 +62,7 @@ p { margin: 0 0 10px; }
 .stack > label, fieldset { display: flex; flex-direction: column; gap: 6px; font-size: 15px; font-weight: 600; color: var(--label); }
 fieldset { border: 0; padding: 0; margin: 0; }
 legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
-input[type=date], input[type=number], input[type=password], input[type=text], select, textarea {
+input[type=date], input[type=number], input[type=password], input[type=text], input[type=tel], select, textarea {
   border: 0; border-radius: 10px; padding: 11px 12px; background: var(--fill); font-size: 17px; font-weight: 400; min-height: 44px; width: 100%; color: var(--label); }
 .intro input[type=date], .intro input[type=number], .intro input[type=password], .intro input[type=text], .intro select { background: var(--cell); }
 textarea { min-height: 64px; }
@@ -75,7 +75,8 @@ input[role=switch] { appearance: none; -webkit-appearance: none; width: 51px; he
 input[role=switch]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .2s; }
 input[role=switch]:checked { background: var(--green); }
 input[role=switch]:checked::after { transform: translateX(20px); }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+/* B4: must win over the general input styles, or the hidden field stretches the page sideways */
+.sr-only, input.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; min-height: 0 !important; padding: 0 !important; margin: -1px !important; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0 !important; white-space: nowrap; }
 .pw { position: relative; display: block; }
 .pw input { padding-right: 70px; }
 .pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--accent); font-size: 15px; font-weight: 400; padding: 8px 10px; cursor: pointer; min-height: 40px; }
@@ -85,7 +86,7 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .today-grid > .col { display: contents; }
 .o1 { order: 1; } .o2 { order: 2; } .o3 { order: 3; } .o4 { order: 4; } .o5 { order: 5; } .o6 { order: 6; }
 .o7 { order: 7; } .o8 { order: 8; } .o9 { order: 9; } .o10 { order: 10; }
-.ring-block { position: relative; width: min(300px, 80vw); margin: 4px auto 6px; }
+.ring-block { position: relative; width: min(300px, 80vw, max(190px, 100vh - 170px)); margin: 4px auto 6px; }
 .ring { width: 100%; display: block; }
 .ring path, .ring circle.arc-base { fill: none; stroke-linecap: round; }
 .arc-base { stroke: var(--ring-base); }
@@ -223,15 +224,61 @@ details .q { margin-top: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } .sheet-card, .sheet-scrim { animation: none; } input[role=switch], input[role=switch]::after { transition: none; } }
 
-/* laptop: two columns on Today, wider calendar */
-@media (min-width: 900px) {
-  .screen.tab-today { max-width: 1080px; padding-inline: 32px; }
-  .tab-today .today-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; }
+
+/* ---------- B3: adaptive layouts ---------- */
+.brand { display: none; }
+.food-grid > .food-card { display: none; }
+.food-grid > .food-card.sel { display: block; }
+.phase-label { font-size: 13px; font-weight: 600; color: var(--label2); text-transform: uppercase; letter-spacing: .02em; margin-bottom: 4px; }
+
+/* Mid width (phone landscape, iPad portrait): two columns, bottom tab bar stays */
+@media (min-width: 640px) {
+  .screen { max-width: 960px; padding-inline: 24px; }
+  .tab-today .today-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 24px; align-items: start; }
   .tab-today .today-grid > .col { display: flex; flex-direction: column; }
-  .screen.tab-calendar { max-width: 1000px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 28px; align-items: start; padding-inline: 32px; }
+  .hist-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0 24px; align-items: start; }
+  .hist-list { margin-top: 0; }
+  .settings-grid { columns: 2; column-gap: 20px; }
+  .settings-grid > .card { break-inside: avoid; display: inline-block; width: 100%; }
+  .screen.tab-calendar { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 24px; align-items: start; }
   .tab-calendar .topbar, .tab-calendar .month-nav, .tab-calendar .cal-grid { grid-column: 1; }
   .tab-calendar .legend { grid-column: 2; grid-row: 2 / span 2; margin-top: 0; grid-template-columns: 1fr; }
   .tab-calendar > .fine, .tab-calendar > .link { grid-column: 2; }
   .actions { grid-template-columns: 1fr 1fr; }
-  .tabs { max-width: 600px; margin: 0 auto; border-radius: 18px 18px 0 0; border: .5px solid var(--sep); border-bottom: 0; }
 }
+/* Short screens (phone landscape): smaller title, tighter top */
+@media (max-height: 500px) {
+  h1 { font-size: 28px; line-height: 34px; }
+  .topbar { padding-top: 10px; }
+  .cd { font-size: 34px; }
+  .stl { font-size: 15px; margin-top: 4px; }
+  .sub { font-size: 12px; }
+  .ring-center { padding: 0 12%; }
+}
+
+/* Laptop and iPad landscape: sidebar instead of the tab bar, content uses the width */
+@media (min-width: 1000px) {
+  body { padding-left: 240px; }
+  .screen, .screen.tab-today, .screen.tab-calendar { max-width: 1200px; margin: 0 auto; padding: 8px 40px 40px; }
+  .tabs { top: 0; bottom: 0; left: 0; right: auto; width: 240px; display: flex; flex-direction: column; gap: 2px; padding: calc(20px + env(safe-area-inset-top)) 12px 20px;
+    border-top: 0; border-right: .5px solid var(--sep); border-radius: 0; max-width: none; margin: 0; background: color-mix(in srgb, var(--cell) 70%, transparent); }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--round); font-size: 22px; font-weight: 700; padding: 4px 10px 18px; }
+  .brand .mark { width: 30px; height: 30px; }
+  .tabs button { flex-direction: row; justify-content: flex-start; gap: 12px; font-size: 15px; font-weight: 500; color: var(--label); min-height: 40px; padding: 8px 10px; border-radius: 9px; }
+  .tabs svg { width: 22px; height: 22px; color: var(--accent); }
+  .tabs button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .tabs button.on svg { color: #fff; }
+  .tab-today .today-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 32px; }
+  .ring-block { width: min(340px, 30vw, max(220px, 100vh - 280px)); }
+  .seg { display: none; }
+  .food-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 20px; align-items: start; }
+  .food-grid > .food-card { display: block; }
+  .settings-grid { columns: 2; column-gap: 24px; }
+  #toast { left: calc(50% + 120px); }
+  /* sheets become a centred dialog */
+  .sheet-card { top: 50%; bottom: auto; left: calc(50% + 120px); right: auto; width: min(560px, 90vw); max-height: 86vh; transform: translate(-50%, -50%); border-radius: 14px;
+    padding: 20px 24px 24px; animation: pop .2s ease-out; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .grabber { display: none; }
+}
+@keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@media (min-width: 1000px) and (prefers-reduced-motion: reduce) { .sheet-card { animation: none; } }

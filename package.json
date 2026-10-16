@@ -1,0 +1,13 @@
+{
+  "name": "cycle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node tests/engine.test.mjs && node tests/rules.test.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "test": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "playwright": "1.56.0"
+  }
+}

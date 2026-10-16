@@ -1,12 +1,12 @@
-// Encrypted sync through her own Google Drive (FR-10, NFR-03). No server: the browser talks to Google directly.
+// Encrypted sync through the user's own Google Drive (FR-10, NFR-03). No server: the browser talks to Google directly.
 // The vault file holds only ciphertext. Access scope drive.file = only files this app created.
-// Same pattern as the Finances app, with its own file name and storage keys (both apps share one web address).
+// Own file name and storage keys, so other apps on the same web address are never touched.
 import { seal, open } from './crypto.js';
 
 export const VAULT_NAME = 'cycle-vault.json';
 const APP_TAG = 'cycle-wellness-vault';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const LS = (k) => `cycle_${k}`; // keeps clear of the Finances app's keys
+const LS = (k) => `cycle_${k}`; // keeps clear of other apps' keys on this address
 
 export async function sealVault(obj, key, salt, iter) { return JSON.stringify({ app: APP_TAG, v: 1, kdf: 'PBKDF2-SHA256', iter, salt, ...(await seal(obj, key)) }); }
 export function vaultHeader(text) {
