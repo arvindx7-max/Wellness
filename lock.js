@@ -25,6 +25,9 @@ async function prfFor(credId, prfSalt) {
   return out;
 }
 // Creates the passkey and returns what to store: the data key, wrapped by the Face ID secret.
+async function whenFocused() {
+  for (let i = 0; i < 40 && typeof document !== 'undefined' && document.hasFocus && !document.hasFocus(); i++) await new Promise((r) => setTimeout(r, 100));
+}
 export async function setup(dataKey) {
   const prfSalt = b64(crypto.getRandomValues(new Uint8Array(32)));
   const hkdfSalt = b64(crypto.getRandomValues(new Uint8Array(16)));
@@ -40,7 +43,16 @@ export async function setup(dataKey) {
     } });
   } catch (e) { throw new Error(e.name === 'NotAllowedError' ? 'Face ID setup was cancelled.' : `Face ID setup failed (${e.name}).`); }
   const credId = b64(cred.rawId);
-  const wrap = await wrapKeyFrom(await prfFor(credId, prfSalt), hkdfSalt);
+  // B15: on a Mac the page can lose focus while the system sheet closes; wait for focus, and try once more if the browser says so
+  await whenFocused();
+  let prf;
+  try { prf = await prfFor(credId, prfSalt); }
+  catch (e) {
+    if (e && e.code === 'noprf') throw e;
+    await new Promise((r) => setTimeout(r, 600)); await whenFocused();
+    try { prf = await prfFor(credId, prfSalt); } catch (e2) { if (e2 && e2.code === 'noprf') throw e2; throw new Error(e2 && e2.name === 'NotAllowedError' ? 'Face ID / Touch ID setup was not finished. Click the page once, then try again.' : `Face ID setup failed (${(e2 && (e2.name || e2.message)) || 'error'}).`); }
+  }
+  const wrap = await wrapKeyFrom(prf, hkdfSalt);
   return { credId, prfSalt, hkdfSalt, wrapped: await seal({ raw: await exportRaw(dataKey) }, wrap), since: new Date().toISOString() };
 }
 export async function unlock(meta) {

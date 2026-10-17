@@ -157,5 +157,18 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('Medium: next cycle fertile days shown (12 Nov)', !!dayInfo('2026-11-12', predict(ps3, {}, '2026-10-03'), ps3, {}).fertile, true);
 }
 
+// v3.2 (B11): a period that is months overdue is "no period logged since", not "N days late"
+{
+  const ps = P('2026-01-10', '2026-02-09', '2026-03-11');
+  const st = predict(ps, {}, '2026-10-03').state;
+  eq('B11: months overdue is marked stale', st.id === 'late' && st.stale === true, true);
+  eq('B11: stale keeps the last start', st.lastStart, '2026-03-11');
+  const n = predict(ps, {}, '2026-10-03').notes.find((x) => x.kind === 'late');
+  eq('B11: the note says no period logged since the last start', /No period has been logged since 2026-03-11/.test(n.text), true);
+  const ps2 = P('2026-07-03', '2026-08-02', '2026-09-01');
+  const st2 = predict(ps2, {}, '2026-10-03').state;
+  eq('B11: a few days late is still "late by N days"', st2.id === 'late' && !st2.stale, true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

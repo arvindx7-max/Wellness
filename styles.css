@@ -28,7 +28,7 @@
     --ring-base: rgba(118, 118, 128, .32); --seg-on: #636366;  }
 :root[data-mode="light"] { color-scheme: light; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; background: var(--bg); color: var(--label); font: 17px/1.35 var(--text); letter-spacing: -0.02em; -webkit-text-size-adjust: 100%; -webkit-font-smoothing: antialiased; }
+html, body { touch-action: manipulation; margin: 0; background: var(--bg); color: var(--label); font: 17px/1.35 var(--text); letter-spacing: -0.02em; -webkit-text-size-adjust: 100%; -webkit-font-smoothing: antialiased; }
 body { padding: env(safe-area-inset-top) 0 0; }
 button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
 a { color: var(--accent); }
@@ -335,3 +335,12 @@ details .q { margin-top: 12px; }
 .sheet-card .irow { background: var(--fill); }
 .sheet-card .irow input[type=date] { background: var(--cell); }
 .intro textarea { background: var(--cell); width: 100%; box-sizing: border-box; }
+
+/* v3.2 (B9) review ticks and replace option */
+.irow .tick { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; font-size: 15px; color: var(--label); }
+.irow .tick input { width: 22px; height: 22px; }
+.irow.off { opacity: 0.55; }
+.replace-opt { display: flex; gap: 10px; align-items: flex-start; background: var(--cell); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; }
+.replace-opt input { width: 22px; height: 22px; flex: none; margin-top: 2px; }
+.pregnote { grid-column: 1 / -1; margin: 0; color: var(--label2); }
+.warnbox { border: 1px solid var(--red); }
