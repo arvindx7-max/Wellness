@@ -268,7 +268,7 @@ function todayView() {
   const est = `<p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>`;
   // One list of blocks; on a phone they stack in this order, on a laptop they split into two columns.
   const L = look();
-  return `${heroView(p, sub, heroBtn, t)}
+  return `${heroView(p, heroBtn, t)}
   ${flagCards()}
   ${L.companion !== 'off' && !L.noteSeen ? `<section class="note companion-note"><p>${h(TH.COMPANION_CAPTION)}</p><button class="btn small" data-act="note-seen">Got it</button></section>` : ''}
   <div class="today-grid">
@@ -291,7 +291,7 @@ function todayView() {
   </div>`;
 }
 // U2: one big readout in the header, with the cycle-aware companion
-function heroView(p, sub, btn, t) {
+function heroView(p, btn, t) {
   const st = p.state, L = look();
   let lead, big;
   if (st.id === 'late') { lead = 'Period late by'; big = plural(st.daysLate, 'day'); }
@@ -813,6 +813,7 @@ document.addEventListener('change', async (e) => {
     el.value = '';
   } else if (el.dataset.act === 'import-pick' && el.files[0]) {
     try { S.imp = await readBackup(el.files[0]); render(); } catch (err) { toast(err.message); }
+    el.value = ''; // G-3: the same file can be picked again after a refusal
   }
 });
 document.addEventListener('submit', async (e) => {
