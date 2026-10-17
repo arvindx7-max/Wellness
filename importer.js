@@ -16,7 +16,7 @@ const DATE_RE = new RegExp([
 const HEADING_RE = new RegExp(`^\\s*(${MON})\\b\\.?\\s+(\\d{4})\\s*$`, 'i');   // "June 2026" on its own line: gives the year to the lines below
 const YEAR_RE = /^\s*((?:19|20)\d{2})\s*$/;
 // lines about other things than periods
-const IGNORE_RE = /ovulat|fertil|eisprung|fruchtbar|generated|exported|created|printed|report date|erstellt|exportiert|birth|geburt|due date|termin/i;
+const IGNORE_RE = /ovulat|fertil|eisprung|fruchtbar|pregnan|schwanger|miscarriage|fehlgeburt|generated|exported|created|printed|report date|erstellt|exportiert|birth|geburt|due date|termin/i;
 
 const valid = (y, m, d) => m >= 1 && m <= 12 && d >= 1 && d <= 31 && isDate(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
 const iso = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -51,7 +51,8 @@ export function findPeriods(text, opts = {}) {
       if (m[1] !== undefined) { y = +m[1]; mo = +m[2]; d = +m[3]; }
       else if (m[4] !== undefined) {
         const a = +m[4], b = +m[5]; y = m[6].length === 2 ? 2000 + +m[6] : +m[6];
-        if (order === 'mdy') { mo = a; d = b; } else { d = a; mo = b; }
+        const asMdy = (a <= 12 && b > 12) || (order === 'mdy' && !(a > 12 && b <= 12));
+        if (asMdy) { mo = a; d = b; } else { d = a; mo = b; }
       } else if (m[7] !== undefined) { d = +m[7]; mo = monthNo(m[8]); y = m[9] ? +m[9] : null; }
       else { mo = monthNo(m[10]); d = +m[11]; y = m[12] ? +m[12] : null; }
       if (!mo) continue;
@@ -88,20 +89,29 @@ export function findPeriods(text, opts = {}) {
 }
 
 // text of a PDF, line by line. The reader is loaded only now, from this app's own files; nothing is sent anywhere.
+async function readPages(pdfjs, buffer) {
+  const task = pdfjs.getDocument({ data: new Uint8Array(buffer.slice(0)), isEvalSupported: false });
+  try {
+    const doc = await task.promise;
+    const out = [];
+    for (let n = 1; n <= doc.numPages && n <= 60; n++) {
+      const page = await doc.getPage(n); const tc = await page.getTextContent();
+      const items = tc.items.filter((i) => i.str && i.str.trim()).map((i) => ({ s: i.str, x: i.transform[4], y: i.transform[5] }));
+      items.sort((a, b) => b.y - a.y);
+      const lines = [];
+      for (const it of items) { const L = lines[lines.length - 1]; if (L && Math.abs(L.y - it.y) <= 3) L.items.push(it); else lines.push({ y: it.y, items: [it] }); }
+      for (const L of lines) out.push(L.items.sort((a, b) => a.x - b.x).map((i) => i.s).join(' '));
+    }
+    return out.join('\n');
+  } finally { await task.destroy().catch(() => {}); }
+}
 export async function pdfToText(buffer) {
   const pdfjs = await import('./vendor/pdfjs/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
-  const task = pdfjs.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false });
-  const doc = await task.promise;
-  const out = [];
-  for (let n = 1; n <= doc.numPages && n <= 60; n++) {
-    const page = await doc.getPage(n); const tc = await page.getTextContent();
-    const items = tc.items.filter((i) => i.str && i.str.trim()).map((i) => ({ s: i.str, x: i.transform[4], y: i.transform[5] }));
-    items.sort((a, b) => b.y - a.y);
-    const lines = [];
-    for (const it of items) { const L = lines[lines.length - 1]; if (L && Math.abs(L.y - it.y) <= 3) L.items.push(it); else lines.push({ y: it.y, items: [it] }); }
-    for (const L of lines) out.push(L.items.sort((a, b) => a.x - b.x).map((i) => i.s).join(' '));
+  try { return await readPages(pdfjs, buffer); } catch (err) {
+    // some browsers refuse the background worker: read on the main thread instead (a short pause, same result)
+    console.error('PDF read with a worker failed, trying the main thread:', err && err.message);
+    globalThis.pdfjsWorker = await import('./vendor/pdfjs/pdf.worker.min.mjs');
+    return readPages(pdfjs, buffer);
   }
-  await task.destroy();
-  return out.join('\n');
 }

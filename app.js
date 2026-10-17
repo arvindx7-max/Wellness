@@ -216,15 +216,23 @@ function importPicker() {
     <h2>Or paste dates</h2>${pasteSteps()}${pasteForm()}`;
 }
 // B7: dates found in a PDF, CSV or text, shown as a list to check before anything is stored
+const closeToPrev = (rows, i) => { const a = rows[i - 1], b = rows[i]; return !!(a && isDate(a.start) && isDate(b.start) && diff(b.start, a.start) >= 0 && diff(b.start, a.start) < 15); };
+const CLOSE_NOTE = '<p class="fine warn">Less than 15 days after the row above. Remove it if it is the same period.</p>';
+// I2: after a date is edited, the notes are updated in place (a redraw would drop the keyboard focus)
+function refreshCloseNotes() {
+  document.querySelectorAll('.irow').forEach((li, i) => {
+    const has = li.querySelector('.warn'), want = S.imp && S.imp.rows && closeToPrev(S.imp.rows, i);
+    if (want && !has) li.insertAdjacentHTML('beforeend', CLOSE_NOTE); else if (!want && has) has.remove();
+  });
+}
 function reviewBody() {
   const m = S.imp; const inPage = S.view === 'import';
   const rows = m.rows.map((r, i) => {
-    const prev = m.rows[i - 1];
-    const close = prev && isDate(prev.start) && isDate(r.start) && diff(r.start, prev.start) >= 0 && diff(r.start, prev.start) < 15;
+    const close = closeToPrev(m.rows, i);
     return `<li class="irow"><label>Start<input type="date" name="s${i}" value="${h(r.start)}" max="${today()}" data-act="row-start" data-i="${i}"></label>
       <label>End (optional)<input type="date" name="e${i}" value="${h(r.end)}" max="${today()}" data-act="row-end" data-i="${i}"></label>
       <button type="button" class="link" data-act="row-del" data-i="${i}" aria-label="Remove this period">Remove</button>
-      ${close ? '<p class="fine warn">Less than 15 days after the row above. Remove it if it is the same period.</p>' : ''}</li>`;
+      ${close ? CLOSE_NOTE : ''}</li>`;
   }).join('');
   return `<div class="notice"><p><strong>${plural(m.rows.length, 'period')} found</strong> in ${h(m.source)}.</p>
       <p class="fine">Nothing is stored yet. The list is a suggestion: dates in other apps are laid out differently, so look at every row.</p></div>
@@ -896,7 +904,7 @@ document.addEventListener('change', async (e) => {
   } else if (el.dataset.act === 'look-card') {
     const l = look(); await setLook({ cards: { ...l.cards, [el.dataset.k]: el.checked } });
   } else if ((el.dataset.act === 'row-start' || el.dataset.act === 'row-end') && S.imp && S.imp.rows) {
-    S.imp.rows[+el.dataset.i][el.dataset.act === 'row-start' ? 'start' : 'end'] = el.value;
+    S.imp.rows[+el.dataset.i][el.dataset.act === 'row-start' ? 'start' : 'end'] = el.value; refreshCloseNotes();
   } else if (el.dataset.act === 'import-json' && el.files[0]) {
     try { S.imp = await readBackup(el.files[0]); openSheet(S.imp.kind === 'found' ? 'import-review' : 'import-preview'); } catch (err) { toast(err.message); }
     el.value = '';

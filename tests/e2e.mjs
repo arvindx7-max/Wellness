@@ -224,6 +224,10 @@ for (const eng of want) {
     await q.waitForSelector('.irow');
     ok(`${eng} v3.1: pasted dates become a list, exported and ovulation lines left out`, (await rowsOf(q, '.intro')).join() === '2026-06-24>2026-06-28,2026-07-25>2026-07-29,2026-08-24>2026-08-28');
     ok(`${eng} v3.1: nothing stored while checking`, (await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('cycle-wellness'); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').count(); g.onsuccess = () => res(g.result); }; }))) === 0);
+    await q.locator('.irow input[data-act=row-start]').nth(1).fill('2026-07-01'); await q.locator('.irow input[data-act=row-start]').nth(1).dispatchEvent('change');
+    ok(`${eng} v3.1: the 15-day note appears at once after editing a date (I2)`, await until(q, () => document.querySelectorAll('.irow')[1].querySelector('.warn') !== null));
+    await q.locator('.irow input[data-act=row-start]').nth(1).fill('2026-07-25'); await q.locator('.irow input[data-act=row-start]').nth(1).dispatchEvent('change');
+    ok(`${eng} v3.1: the note goes away when the date is fixed`, await until(q, () => document.querySelectorAll('.irow')[1].querySelector('.warn') === null));
     await q.click('[data-act=row-del][data-i="1"]');
     ok(`${eng} v3.1: a row can be removed`, (await q.locator('.irow').count()) === 2);
     await q.click('[data-act=row-add]'); await q.locator('.irow input[data-act=row-start]').nth(2).fill('2026-05-25');
@@ -248,6 +252,9 @@ for (const eng of want) {
     ok(`${eng} v3.1: periods already in Cycle are left out`, /1 period, from 29 Jun 2026/.test(await q.textContent('#sheet')) && /2 periods already in Cycle/.test(await q.textContent('#sheet')), await q.textContent('#sheet'));
     await q.click('#sheet [data-act=import-confirm]');
     ok(`${eng} v3.1: PDF import merged`, await until(q, () => window.__cycle.S.data.periods.length === 4));
+    // fallback: the same PDF read on the main thread (no background worker)
+    const mainThread = await q.evaluate(async (bytes) => { const { pdfToText } = await import('./importer.js'); globalThis.pdfjsWorker = await import('./vendor/pdfjs/pdf.worker.min.mjs'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdfBytes(['25 May 2026 - 29 May 2026'])]);
+    ok(`${eng} v3.1: a PDF is also read on the main thread (fallback)`, /25 May 2026 - 29 May 2026/.test(mainThread), String(mainThread).slice(0, 100));
     await q.setInputFiles('input[data-act=import-json]', upload('scan.pdf', 'application/pdf', pdfBytes([])));
     ok(`${eng} v3.1: a PDF without text is refused`, await until(q, () => /no readable text/.test(document.querySelector('#toast').textContent)));
     await q.setInputFiles('input[data-act=import-json]', upload('periods.csv', 'text/csv', Buffer.from('start,end\n2026-04-25,2026-04-29\n')));

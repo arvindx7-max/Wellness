@@ -33,5 +33,8 @@ ok('ovulation and export lines are ignored', starts(f('Ovulation 2026-07-08\nExp
 ok('impossible dates are skipped', f('2026-02-30\n31.04.2026').rows.length === 0);
 ok('text without dates', f('hello').rows.length === 0 && f('').rows.length === 0);
 ok('two-digit year', starts(f('24.06.26')) === '2026-06-24');
+ok('mixed day-first and month-first dates are each read the only way they can be', (() => { const r = f('25.06.2026\n07.24.2026'); return starts(r) === '2026-06-25,2026-07-24' && r.skipped === 0 && !r.ambiguous; })());
+ok('the chosen order does not break a date that has only one reading', starts(f('25.06.2026\n05/06/2026', { order: 'mdy' })) === '2026-05-06,2026-06-25');
+ok('pregnancy and miscarriage lines are ignored (English and German)', starts(f('Pregnancy test 2026-07-08\nSchwangerschaft 2026-07-09\nMiscarriage 2026-07-10\nFehlgeburt 2026-07-11\n2026-06-24')) === '2026-06-24');
 ok('at most 200 rows', f(Array.from({ length: 300 }, (_, i) => `20${String(i % 25).padStart(2, '0')}-01-${String(1 + (i % 28)).padStart(2, '0')}\n2001-${String(1 + (i % 12)).padStart(2, '0')}-${String(1 + (i % 27)).padStart(2, '0')}`).join('\n')).rows.length <= 200);
 console.log(`importer: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);
