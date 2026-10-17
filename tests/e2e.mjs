@@ -69,6 +69,9 @@ const metrics = (p) => p.evaluate(() => {
 try {
 for (const eng of want) {
   const browser = await ENGINES[eng].launch();
+  // F20: in WebKit every test page gets a fresh browser (GitHub's WebKit stalls the passphrase step after many pages in one browser)
+  const extra = [];
+  const fresh = async () => { if (eng !== 'webkit') return browser; const b = await ENGINES[eng].launch(); extra.push(b); return b; };
   for (const [size, [w, h]] of Object.entries(SIZES)) for (const scheme of ['light', 'dark']) {
     const tag = `${eng} ${size} ${scheme}`;
     // WebKit on GitHub's shared runners can stall after many pages in one browser: give each WebKit page its own browser
@@ -125,7 +128,7 @@ for (const eng of want) {
     await ctx.close(); if (own) await own.close();
   }
   // Core flows once per engine (phone size)
-  const ctx = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+  const ctx = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
   const p = await ctx.newPage(); await p.clock.install({ time: new Date(NOW) }); p.on('pageerror', (e) => errors.push(`${eng} flows: ${e.message}`));
   await p.goto(BASE); await setup(p);
@@ -152,7 +155,7 @@ for (const eng of want) {
   {
     const backup = (periods) => JSON.stringify({ app: 'cycle', v: 1, settings: { updatedAt: 1 }, periods: periods.map(([s, e], i) => ({ id: `t${i}`, start: s, end: e, updatedAt: 1 })), days: {}, checkins: {}, acks: {} });
     const file = (name, text) => ({ name, mimeType: 'application/json', buffer: Buffer.from(text) });
-    const c2 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c2 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c2.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3: ${e.message}`));
     await q.goto(BASE);
@@ -224,7 +227,7 @@ for (const eng of want) {
     const toastText = (p) => p.evaluate(() => document.querySelector('#toast').textContent);
 
     // B8: restore screen on a first start
-    const c3 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c3 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c3.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
     const r3 = await c3.newPage(); await r3.clock.install({ time: new Date(NOW) }); r3.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
     await r3.goto(BASE); await r3.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 });
@@ -243,7 +246,7 @@ for (const eng of want) {
     await c3.close();
 
     // B7 at start-up: paste, review list, edit, continue
-    const c4 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c4 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c4.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c4.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
     const seen = []; q.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') seen.push(m.text().slice(0, 160)); }); q.on('requestfailed', (r) => seen.push(`request failed ${r.url().slice(-40)}`)); q.on('worker', () => seen.push('worker started'));
@@ -365,7 +368,7 @@ for (const eng of want) {
     await c4.close();
 
     // ---- v4: ovulation tests, sex life, hide and display options, report, late check, history, pregnancy, B16, word budget ----
-    const c5 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c5 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c5.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const v = await c5.newPage(); await v.clock.install({ time: new Date(NOW) }); v.on('pageerror', (e) => errors.push(`${eng} v4: ${e.message}`));
     await v.goto(BASE); await setup(v);
@@ -437,7 +440,7 @@ for (const eng of want) {
     await c5.close();
 
     // B16: a vault search that finishes after she went back must not leave a signed-out "Vault found" screen
-    const c6 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c6 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c6.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
     await c6.route('https://www.googleapis.com/drive/v3/files?**', async (r) => { await new Promise((x) => setTimeout(x, 400)); r.fulfill({ contentType: 'application/json', body: JSON.stringify({ files: [{ id: 'dummy_file_A', name: 'cycle-vault.json' }] }) }); });
     const w = await c6.newPage(); w.on('pageerror', (e) => errors.push(`${eng} v4 B16: ${e.message}`));
@@ -454,6 +457,7 @@ for (const eng of want) {
     ok(`${eng} v4: B16 the switch account option shows even without the account name`, found.id === 'dummy_file_A' && /Signed in to Google/.test(found.text) && /Use a different Google account/.test(found.text));
     await c6.close();
   }
+  for (const b of extra) await b.close().catch(() => {});
   await browser.close();
 }
 } catch (e) {
