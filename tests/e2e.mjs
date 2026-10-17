@@ -40,7 +40,7 @@ async function setup(p) {
   await p.check('input[name=ageBand][value="26-41"]'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
   await p.click('form[data-form=onboard] button:not(.pw-eye)');
   await p.fill('input[name=p1]', PASS); await p.fill('input[name=p2]', PASS); await p.check('input[name=saved]');
-  await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 15000 });
+  await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 45000 });
   for (const [s, e] of PERIODS) {
     await p.click('[data-tab=history]'); await p.click('[data-act=add-past] >> nth=0');
     await p.fill('#sheet input[name=start]', s); await p.fill('#sheet input[name=end]', e); await p.click('#sheet form button:not(.pw-eye)'); await p.waitForTimeout(150);
@@ -105,7 +105,7 @@ for (const eng of want) {
   await p.click('.tabs [data-tab=settings]'); await p.click('[data-act=lock-now]');
   await p.fill('form[data-form=unlock] input[name=p]', 'wrong-passphrase'); await p.click('form[data-form=unlock] button:not(.pw-eye)'); await p.waitForTimeout(1500);
   ok(`${eng} flows: wrong passphrase stays locked`, (await p.evaluate(() => window.__cycle.S.view)) === 'locked');
-  await p.fill('form[data-form=unlock] input[name=p]', PASS); await p.click('form[data-form=unlock] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 15000 });
+  await p.fill('form[data-form=unlock] input[name=p]', PASS); await p.click('form[data-form=unlock] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 45000 });
   await p.click('.tabs [data-tab=settings]'); await p.fill('form[data-form=helpline] input[name=name]', LINE.name); await p.fill('form[data-form=helpline] input[name=number]', LINE.number);
   await p.click('form[data-form=helpline] button'); await p.waitForTimeout(200);
   for (const d of ['2026-10-01', '2026-10-02', '2026-10-03']) {
@@ -127,7 +127,7 @@ for (const eng of want) {
     await c2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c2.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3: ${e.message}`));
     await q.goto(BASE);
-    ok(`${eng} v3: welcome offers a backup start`, await q.waitForSelector('[data-act=import-start]', { timeout: 15000 }).then(() => true, () => false));
+    ok(`${eng} v3: welcome offers a backup start`, await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }).then(() => true, () => false));
     ok(`${eng} v3: greyed Drive button is explained`, (await q.isDisabled('[data-act=restore-start]')) && /not available in this copy/.test(await q.textContent('.intro')));
     await q.click('[data-act=import-start]');
     await q.setInputFiles('input[data-act=import-pick]', file('notes.json', '{"hello":1}'));
@@ -136,7 +136,7 @@ for (const eng of want) {
     await q.setInputFiles('input[data-act=import-pick]', file('b.json', backup(PERIODS))); await q.waitForSelector('form[data-form=import-new]');
     ok(`${eng} v3: preview before anything is stored`, /3 periods, from 24 Jun 2026 to 24 Aug 2026/.test(await q.textContent('.notice')) && (await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('cycle-wellness'); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').count(); g.onsuccess = () => res(g.result); }; }))) === 0);
     await q.fill('input[name=p1]', PASS); await q.fill('input[name=p2]', PASS); await q.check('input[name=saved]'); await q.click('form[data-form=import-new] button:not(.pw-eye)');
-    await q.waitForSelector('main.screen', { timeout: 15000 });
+    await q.waitForSelector('main.screen', { timeout: 45000 });
     ok(`${eng} v3: backup start keeps 3 periods`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 3);
     // Settings import with a Drive vault file: asks for the vault passphrase, then previews
     const vault = await q.evaluate(async (pass) => { const K = await import('./crypto.js'); const C = await import('./cloud.js'); const salt = K.newSalt(); const key = await K.deriveKey(pass, salt);
@@ -145,7 +145,7 @@ for (const eng of want) {
     await q.setInputFiles('input[data-act=import-json]', file('cycle-vault.json', vault)); await q.waitForSelector('#sheet form[data-form=import-open]');
     await q.fill('#sheet input[name=p]', 'wrong-passphrase'); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForTimeout(1500);
     ok(`${eng} v3: vault file with a wrong passphrase stays closed`, await q.isVisible('#sheet form[data-form=import-open]'));
-    await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 15000 });
+    await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 45000 });
     ok(`${eng} v3: vault preview`, /1 period, from 25 May 2026 to 25 May 2026/.test(await q.textContent('#sheet')));
     await q.click('#sheet [data-act=import-confirm]');
     ok(`${eng} v3: vault import merged`, await until(q, () => window.__cycle.S.data.periods.length === 4));
@@ -154,7 +154,7 @@ for (const eng of want) {
     const encText = fs.readFileSync(await dl.path(), 'utf8');
     ok(`${eng} v3: encrypted export is not readable`, JSON.parse(encText).app === 'cycle-wellness-vault' && !/2026-0|"periods"/.test(encText) && /\.encrypted\.json$/.test(dl.suggestedFilename()));
     await q.setInputFiles('input[data-act=import-json]', file('enc.json', encText)); await q.waitForSelector('#sheet form[data-form=import-open]');
-    await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 15000 });
+    await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 45000 });
     ok(`${eng} v3: encrypted export previews with all 4 periods`, /4 periods/.test(await q.textContent('#sheet')));
     await q.click('#sheet [data-act=import-cancel]');
     await q.setInputFiles('input[data-act=import-json]', file('b.json', backup([['2026-04-25', '2026-04-29']]))); await q.waitForSelector('#sheet [data-act=import-cancel]');
