@@ -8,7 +8,7 @@ import { contrast } from '../themes.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(ROOT, 'test-results'); fs.mkdirSync(OUT, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const TYPES = { '.woff': 'font/woff', '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname); if (p.endsWith('/')) p += 'index.html';
   const f = path.join(ROOT, p); if (!f.startsWith(ROOT) || !fs.existsSync(f)) { res.writeHead(404); res.end(); return; }
@@ -76,9 +76,10 @@ for (const eng of want) {
       const m = await metrics(p);
       ok(`${tag} ${tab}: no sideways scrolling`, !m.hscroll);
       if (size === 'laptop') {
-        ok(`${tag} ${tab}: sidebar on the left`, m.navLeft === 0 && m.navTop === 0 && m.navW < 300, JSON.stringify(m));
+        ok(`${tag} ${tab}: floating side rail on the left (U5)`, m.navLeft > 0 && m.navLeft < 40 && m.navW < 100, JSON.stringify(m));
         ok(`${tag} ${tab}: content uses ≥80% of the usable width`, m.main >= 0.8 * Math.min(m.vw - m.navW, 1200), JSON.stringify(m));
-      } else ok(`${tag} ${tab}: tab bar at the bottom`, m.navTop > m.vh - 120, JSON.stringify(m));
+      } else if (size === 'phone-landscape') ok(`${tag} ${tab}: floating side rail in landscape (U5)`, m.navLeft > 0 && m.navLeft < 40 && m.navW < 100, JSON.stringify(m));
+      else ok(`${tag} ${tab}: floating tab bar at the bottom (U5)`, m.navTop > m.vh - 120 && m.navLeft >= 12, JSON.stringify(m));
       if (scheme === 'light' || tab === 'today') await p.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-${tab}.png`) });
     }
     // Today: in landscape the ring must leave room for other content
@@ -101,6 +102,7 @@ for (const eng of want) {
     // Sheet: centred dialog on a laptop, bottom sheet on a phone
     await p.click('.tabs [data-tab=history]'); await p.click('[data-act=add-past] >> nth=0'); await p.waitForTimeout(450); // let the slide-in finish
     const sh = await p.evaluate(() => { const r = document.querySelector('.sheet-card').getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
+    await p.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-sheet.png`) });
     ok(`${tag} sheet position`, size === 'laptop' ? sh.top > 20 && sh.bottom < h - 20 : Math.abs(sh.bottom - h) < 2, JSON.stringify(sh));
     await p.click('#sheet .btn.wide[data-act=close-sheet]');
     // v3.2: a long gap shows "No period logged since", the review list with ticks fits, no sideways scrolling
@@ -187,7 +189,7 @@ for (const eng of want) {
     await goSet(q, 'look');
     await q.click('[data-act=look-mode][data-v=dark]'); await lookIs(q, { mode: 'dark' }); await q.click('[data-act=look-theme][data-v=petal]'); await lookIs(q, { mode: 'dark', theme: 'petal' });
     const lk = await q.evaluate(() => { const cs = getComputedStyle(document.documentElement); return { mode: document.documentElement.dataset.mode, bg: cs.getPropertyValue('--bg').trim(), h1: cs.getPropertyValue('--h1').trim(), body: getComputedStyle(document.body).backgroundColor }; });
-    ok(`${eng} v3: forced dark with Petal`, lk.mode === 'dark' && lk.bg === '#000000' && lk.h1 === '#8C2E52' && lk.body === 'rgb(0, 0, 0)', JSON.stringify(lk));
+    ok(`${eng} v3: forced dark with Petal`, lk.mode === 'dark' && lk.bg === '#0B0A14' && lk.h1 === '#8C2E52' && lk.body === 'rgb(11, 10, 20)', JSON.stringify(lk));
     await q.click('[data-act=look-companion][data-v=sprout]'); await lookIs(q, { companion: 'sprout' }); await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: sprout companion`, (await q.getAttribute('.companion', 'data-stage')).startsWith('sprout-'));
     await goSet(q, 'look'); await q.click('[data-act=look-companion][data-v=off]'); await lookIs(q, { companion: 'off' }); await q.click('label.switch:has([data-k=week]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.week === false); await q.click('label.switch:has([data-k=food]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.food === false);
@@ -340,6 +342,96 @@ for (const eng of want) {
       await new Promise((r) => setTimeout(r, 500)); return held && c.S.redrawLater === false; }));
     ok(`${eng} v3.2: with nothing open the refresh redraws`, await q.evaluate(() => { window.__cycle.S.redrawLater = true; document.activeElement && document.activeElement.blur(); window.__cycle.softRender(); return window.__cycle.S.redrawLater === false; }));
     await c4.close();
+
+    // ---- v4: ovulation tests, sex life, hide and display options, report, late check, history, pregnancy, B16, word budget ----
+    const c5 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await c5.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
+    const v = await c5.newPage(); await v.clock.install({ time: new Date(NOW) }); v.on('pageerror', (e) => errors.push(`${eng} v4: ${e.message}`));
+    await v.goto(BASE); await setup(v);
+    const T0 = '2026-10-03';
+    await v.click('.tabs [data-tab=today]'); await v.click('.wk.is-today'); await v.waitForSelector('#sheet [data-act=ovu-add]');
+    ok(`${eng} v4: the day sheet offers ovulation tests and sex life, marked New`, (await v.isVisible('#sheet [data-act=sex]')) && (await v.locator('#sheet .badge-new').count()) === 2);
+    await v.click('#sheet [data-act=ovu-add][data-r=pos]');
+    ok(`${eng} v4: a positive test is logged with its time and a remove button`, await until(v, () => { const d = window.__cycle.S.data.days['2026-10-03']; return d && d.ovu.length === 1 && d.ovu[0].r === 'pos' && d.ovuAt > 0 && !!document.querySelector('#sheet [data-act=ovu-del]'); }));
+    ok(`${eng} v4: the positive test sharpens this cycle (start never later)`, await v.evaluate(() => { const p = window.__cycle.S.pred; return p.cycles[0].testAnchor === '2026-10-03' && p.ovulation.likely === '2026-10-04' && p.possible[1] === '2026-10-06'; }));
+    await v.click('#sheet [data-act=sex][data-kind=protected]'); await v.waitForSelector('#sheet [data-act=sex-note]');
+    await v.screenshot({ path: path.join(OUT, `${eng}-v4-daysheet.png`) });
+    await v.fill('#sheet [data-act=sex-note]', 'dummy_metric_A'); await v.press('#sheet [data-act=sex-note]', 'Tab');
+    ok(`${eng} v4: sex life is stored with its own time and note`, await until(v, () => { const d = window.__cycle.S.data.days['2026-10-03']; return d.sex.kind === 'protected' && d.sex.note === 'dummy_metric_A' && d.sexAt > 0 && d.flow === undefined; }));
+    await v.click('#sheet .sheet-card button[data-act=close-sheet]');
+    await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v4: the calendar marks the test and the sex entry`, (await v.locator('.cal-day .s-test').count()) === 1 && (await v.locator('.cal-day .s-sex').count()) === 1);
+    // hide options
+    await goSet(v, 'display');
+    await v.click('label.switch:has([data-k=sex]) input');
+    ok(`${eng} v4: hiding sex life offers to delete it`, await until(v, () => window.__cycle.S.data.settings.hide.sex === true && !!document.querySelector('[data-act=del-cat][data-k=sex]')));
+    await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v4: hidden sex life is gone from the calendar`, (await v.locator('.cal-day .s-sex').count()) === 0);
+    await goSet(v, 'report');
+    ok(`${eng} v4: a hidden category is not offered in the export (G4-5)`, (await v.locator('[data-act=rep-tog][data-k=sex]').count()) === 0 && (await v.locator('[data-act=rep-tog][data-k=tests]').count()) === 1);
+    // report: a real PDF, made on the device
+    const [dlr] = await Promise.all([v.waitForEvent('download'), v.click('[data-act=rep-make]')]);
+    const pdf = fs.readFileSync(await dlr.path());
+    const pdfText = await v.evaluate(async (bytes) => { const { pdfToText } = await import('./importer.js'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdf]);
+    ok(`${eng} v4: the report PDF opens and holds the chosen sections`, /Cycle report/.test(pdfText) && /Periods and cycle lengths/.test(pdfText) && /Ovulation tests/.test(pdfText) && /Positive/.test(pdfText) && !/Days logged: /.test(pdfText) && /Left out by choice:[\s\S]*sex life/.test(pdfText), JSON.stringify(pdfText).slice(0, 900));
+    ok(`${eng} v4: the report file is named by date`, /^cycle-report-2026-10-03\.pdf$/.test(dlr.suggestedFilename()));
+    await goSet(v, 'display');
+    await v.click('[data-act=del-cat][data-k=sex]'); await v.click('#sheet [data-act=confirm-yes]');
+    ok(`${eng} v4: deleting a category clears it everywhere`, await until(v, () => Object.values(window.__cycle.S.data.days).every((d) => !d.sex || d.sex.kind === 'none')));
+    // display options
+    await v.click('[data-act=disp-date][data-v=num]'); await v.click('[data-act=disp-week][data-v=sun]');
+    await v.click('.tabs [data-tab=today]');
+    ok(`${eng} v4: the chosen date format is used`, /03\/10\/2026/.test(await v.textContent('.hero h1')), await v.textContent('.hero h1'));
+    await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v4: the week can start on Sunday`, (await v.textContent('.cal-wd')) === 'Su');
+    await goSet(v, 'display'); await v.click('[data-act=disp-date][data-v=dmy]'); await v.click('[data-act=disp-week][data-v=mon]');
+    // history
+    await v.click('.tabs [data-tab=history]');
+    await v.screenshot({ path: path.join(OUT, `${eng}-v4-history.png`) });
+    ok(`${eng} v4: history shows one bar per cycle with filters`, (await v.locator('.hist-row .cbar').count()) >= 4 && (await v.isVisible('[data-act=hist-filter][data-v=last3]')));
+    await v.click('[data-act=hist-filter][data-v=last3]');
+    ok(`${eng} v4: the Last 3 filter shows 3 cycles`, (await v.locator('.hist-row').count()) === 3);
+    // late period check (a later "today" for this check only)
+    await v.evaluate(() => { const c = window.__cycle; c.S.pred = c.predict(c.S.data.periods, c.S.data.settings, '2026-11-02', c.S.data.days); c.S.tab = 'today'; c.render(); });
+    await v.click('[data-act=late-check]'); await v.waitForSelector('#sheet .cmp');
+    ok(`${eng} v4: the late check starts by comparing this cycle with the others`, (await v.locator('#sheet .cmp').count()) >= 2);
+    await v.click('#sheet [data-act=late-next]'); await v.click('#sheet [data-act=late-preg][data-v=no]');
+    await v.click('#sheet [data-act=late-tog][data-k=changes][data-v=stress]'); await v.click('#sheet [data-act=late-next]'); await v.click('#sheet [data-act=late-next]');
+    await v.screenshot({ path: path.join(OUT, `${eng}-v4-late-result.png`), fullPage: false });
+    const res = await v.textContent('#sheet');
+    ok(`${eng} v4: the result lists the reason and always the urgent warnings (G4-8)`, /Stress can delay a period/.test(res) && /Get advice today/.test(res) && /Call emergency services/.test(res) && !/home pregnancy test/.test(res), res.slice(0, 200));
+    await v.click('#sheet [data-act=late-save]');
+    ok(`${eng} v4: the result is added to today's note`, await until(v, () => /Late check/.test((window.__cycle.S.data.checkins['2026-10-03'] || {}).note || '')));
+    await v.click('#sheet button[data-act=close-sheet].btn');
+    // U4: word budget for Today's first screen, after the one-time note
+    await v.evaluate(() => { const c = window.__cycle; c.recompute(); c.S.tab = 'today'; c.render(); });
+    await v.waitForSelector('main.screen'); const ns = v.locator('[data-act=note-seen]'); if (await ns.count()) { await ns.first().click(); await until(v, () => !document.querySelector('[data-act=note-seen]')); }
+    const words = await v.evaluate(() => { const vh = innerHeight; let n = 0; const walk = document.createTreeWalker(document.querySelector('main'), NodeFilter.SHOW_TEXT);
+      for (let t = walk.nextNode(); t; t = walk.nextNode()) { const el = t.parentElement; if (!el || el.closest('.tabs, #toast')) continue; const r = el.getBoundingClientRect(); if (r.bottom > 0 && r.top < vh && getComputedStyle(el).visibility !== 'hidden') n += (t.textContent.match(/[A-Za-z]{3,}/g) || []).length; } return n; });
+    await v.screenshot({ path: path.join(OUT, `${eng}-v4-today-words.png`) });
+    ok(`${eng} v4: Today's first screen stays short (U4, at most 40 words)`, words <= 40, `words: ${words}`);
+    // pregnancy pause
+    await v.evaluate(async () => { const c = window.__cycle; const ps = c.S.data.periods.filter((x) => !x.deleted).sort((a, b) => (a.start < b.start ? -1 : 1)); Object.assign(ps[ps.length - 1], { excluded: true, excludeReason: 'Pregnancy', updatedAt: Date.now() }); await c.persist(); c.S.tab = 'today'; c.render(); });
+    ok(`${eng} v4: a cycle marked as pregnancy pauses predictions`, /Predictions paused since/.test(await v.textContent('.hero')) && (await v.locator('[data-act=late-check]').count()) === 0);
+    await c5.close();
+
+    // B16: a vault search that finishes after she went back must not leave a signed-out "Vault found" screen
+    const c6 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await c6.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
+    await c6.route('https://www.googleapis.com/drive/v3/files?**', async (r) => { await new Promise((x) => setTimeout(x, 400)); r.fulfill({ contentType: 'application/json', body: JSON.stringify({ files: [{ id: 'dummy_file_A', name: 'cycle-vault.json' }] }) }); });
+    const w = await c6.newPage(); w.on('pageerror', (e) => errors.push(`${eng} v4 B16: ${e.message}`));
+    await w.goto(BASE); await w.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 }); await w.click('[data-act=restore-start]');
+    ok(`${eng} v4: B16 root cause: before sign-in the restore screen asks to sign in, never "Vault found"`, (await w.isVisible('[data-act=restore-signin]')) && !/Vault found/.test(await w.textContent('#app')));
+    const race = await w.evaluate(async () => {
+      const c = window.__cycle; c.S.restore = { token: { token: 'dummy_token_A', exp: Date.now() + 3600e3 } };
+      const run = c.findForRestore(); c.S.restore = {}; c.render(); await run; return { fileId: c.S.restore.fileId, found: /Vault found/.test(document.querySelector("#app").textContent), view: c.S.view, app: document.querySelector("#app").textContent.slice(0, 200) };
+    });
+    ok(`${eng} v4: B16 a late search result goes only to the attempt that started it`, race.fileId === undefined && !race.found, JSON.stringify(race));
+    const lost = await w.evaluate(async () => { const c = window.__cycle; c.S.restore = { fileId: 'dummy_file_A' }; try { await c.restoreFlow('test-passphrase-only'); return 'no error'; } catch (e) { return e.code + ' ' + e.message; } });
+    ok(`${eng} v4: B16 restore without a sign-in asks to sign in again (no program error)`, /^signin Your Google sign-in was lost/.test(lost), lost);
+    const found = await w.evaluate(async () => { const c = window.__cycle; c.S.restore = { token: { token: 'dummy_token_A', exp: Date.now() + 3600e3 } }; await c.findForRestore(); return { id: c.S.restore.fileId, text: document.body.textContent }; });
+    ok(`${eng} v4: B16 the switch account option shows even without the account name`, found.id === 'dummy_file_A' && /Signed in to Google/.test(found.text) && /Use a different Google account/.test(found.text));
+    await c6.close();
   }
   await browser.close();
 }

@@ -9,7 +9,7 @@ import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
 import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v3.2';
+export const VERSION = 'v4';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -116,6 +116,7 @@ function softRender() {
 // ---------------- render ----------------
 function render() {
   S.redrawLater = false;
+  document.body.classList.toggle('sheet-open', !!S.sheet);
   applyLook();
   const app = $('#app');
   if (S.view === 'welcome') app.innerHTML = welcomeView();
@@ -131,7 +132,12 @@ function render() {
     app.innerHTML = `<main class="screen tab-${S.tab}">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
-  if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true"><div class="grabber" aria-hidden="true"></div>${sheetBody()}</div>`; sh.hidden = false; }
+  if (S.sheet && S.view === 'app') {
+    // v4: a sheet that is already open is redrawn in place, without playing the slide-in again (no flicker on each tap)
+    const still = !sh.hidden && sh.dataset.name === S.sheet.name; const top = still ? (sh.querySelector('.sheet-card') || {}).scrollTop || 0 : 0;
+    sh.innerHTML = `<div class="sheet-scrim ${still ? 'still' : ''}" data-act="close-sheet"></div><div class="sheet-card ${still ? 'still' : ''}" role="dialog" aria-modal="true"><div class="grabber" aria-hidden="true"></div>${sheetBody()}</div>`;
+    sh.hidden = false; sh.dataset.name = S.sheet.name; if (top) sh.querySelector('.sheet-card').scrollTop = top;
+  }
   else { sh.hidden = true; sh.innerHTML = ''; }
 }
 
@@ -219,8 +225,10 @@ function restoreView() {
     <button class="btn wide" data-act="import-start">Start from a backup file</button>
     <p class="fine">Wrong Google account? Tap <strong>Use a different Google account</strong> above and choose the other one.</p>
     <button class="btn small" data-act="restore-retry">Search again</button>`;
+  // B16 root cause (from v3.2): this "else" used to belong to the line above, so with no sign-in at all the
+  // screen said "Vault found". Now "Vault found" needs both a sign-in and a found file.
   if (st.token && !st.fileId) body = who + body;
-  else body = `${who}<p class="lede">Vault found in this account. Enter its passphrase to bring your data to this device.</p>
+  else if (st.token && st.fileId) body = `${who}<p class="lede">Vault found in this account. Enter its passphrase to bring your data to this device.</p>
     <form class="stack" data-form="restore">${USER}${pw('p', 'Vault passphrase', 'current-password', true, 0)}<button class="btn primary wide">Unlock and restore</button></form>
     ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}
     <p class="fine">Not your vault, or the passphrase is lost? Tap <strong>Use a different Google account</strong> above. If the passphrase is lost for good, the vault cannot be opened; set Cycle up again from a backup file, then start a new vault in Settings.</p>`;
@@ -363,7 +371,8 @@ function todayView() {
     ? '<button class="btn" data-act="period-end-earlier">Ended on another day</button>'
     : st.id === 'menstruation' ? '' : `<button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
   const flow = (S.data.days[t] || {}).flow || 'none';
-  const est = `<p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>`;
+  // U4: one short line; the explanation lives in the Guide (ⓘ)
+  const est = `<p class="estimate">${st.id === 'late' ? 'Forecasts paused until you log your period' : `Confidence: ${h(p.confidence)}`} ${info('estimate')}</p>`;
   // One list of blocks; on a phone they stack in this order, on a laptop they split into two columns.
   const L = look();
   return `${heroView(p, heroBtn, t)}
@@ -374,7 +383,7 @@ function todayView() {
     <div class="col">
       <section class="ring-block o1">${cycleRing(p)}
         <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div></section>
-      <div class="o2">${fertileLine}${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
+      <div class="o2">${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
       <div class="o4">${L.cards.week ? weekStrip(p) : ''}</div>
       <div class="actions o5">${actions}</div>
       <section class="card o6"><h2>Bleeding today</h2>
@@ -382,9 +391,9 @@ function todayView() {
     </div>
     <div class="col">
       <div class="o2">${sharpenCard(p)}</div>
-      <div class="o3">${L.cards.checkin ? checkinCard(t) : ''}</div>
+      <div class="o3 bento">${L.cards.checkin ? checkinCard(t) : ''}${L.cards.food ? foodTeaser() : ''}</div>
       <div class="o8">${L.cards.phase ? phaseCard(st.id) : ''}</div>
-      <div class="o9">${L.cards.food ? foodTeaser() : ''}</div>
+
       <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
     </div>
   </div>`;
@@ -416,7 +425,7 @@ function heroView(p, btn, t) {
   return `<section class="hero ${art ? 'has-comp' : ''}" aria-label="Today at a glance">
     <div class="top"><h1>Today · ${weekday(t)}, ${fmt(t, true)}</h1>${syncPill()}</div>
     <div class="state">Day ${st.cycleDay} · ${h(st.label)}</div>
-    <div class="lead">${lead}</div><div class="big">${big}</div>
+    <div class="lead">${lead}</div><div class="big">${String(big).replace(/^(\d+) (\w+)$/, '<span class="n">$1</span> <span class="u">$2</span>')}</div>
     <div class="sub">${h(line)}</div>
     ${btn}
     ${art ? `<div class="companion" data-stage="${L.companion}-${phase}" aria-hidden="true">${art}</div>` : ''}
@@ -426,15 +435,15 @@ function heroView(p, btn, t) {
 function sharpenCard(p) {
   if (p.usedCycles >= CONST.MEDIUM_FROM) return '';
   const need = CONST.MEDIUM_FROM - p.usedCycles;
-  return `<section class="card sharpen"><h2>Sharpen your predictions</h2>
-    <p class="fine">Cycle has ${p.usedCycles ? `${plural(p.usedCycles, 'complete cycle')} of yours` : 'no complete cycle of yours yet'}, so it relies on ${p.usedDefault ? 'a typical 29-day cycle' : 'the cycle length you entered'} with a ±${p.spread}-day margin. That is why the ranges are wide. Add ${need === 1 ? 'one more past period' : `${need} more past periods`} with their first and last days, and the estimates narrow to your own rhythm.</p>
-    <button class="btn" data-act="add-past">Add a past period</button></section>`;
+  return `<section class="card sharpen"><h2>Sharpen your predictions</h2><button class="btn small" data-act="add-past">Add a past period</button>
+    <details><summary>Why</summary><p class="fine">Cycle has ${p.usedCycles ? `${plural(p.usedCycles, 'complete cycle')} of yours` : 'no complete cycle of yours yet'}, so it relies on ${p.usedDefault ? 'a typical 29-day cycle' : 'the cycle length you entered'} with a ±${p.spread}-day margin. That is why the ranges are wide. Add ${need === 1 ? 'one more past period' : `${need} more past periods`} with their first and last days, and the estimates narrow to your own rhythm.</p>
+</details></section>`;
 }
 // B2 item 6: what is happening now
 function phaseCard(id) {
   const info = T.PHASE_INFO[id]; if (!info) return '';
-  return `<section class="card phase"><h2>${h(info.title)}</h2><p>${h(info.text)}</p>
-    <p class="fine">Sources: ${info.src.map(([n, u]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${h(n)}</a>`).join('; ')}</p></section>`;
+  return `<section class="card phase"><h2>${h(info.title)}</h2><details><summary>More</summary><p>${h(info.text)}</p>
+    <p class="fine">Sources: ${info.src.map(([n, u]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${h(n)}</a>`).join('; ')}</p></details></section>`;
 }
 const WARNING = 'Calendar-based estimate. With typical use, fertility-awareness methods lead to 12–24 pregnancies per 100 women in the first year. This is not a reliable method of birth control: use contraception on any day if you want to avoid pregnancy.';
 const FLOWS = [['none', 'None'], ['spotting', 'Spotting'], ['light', 'Light'], ['medium', 'Medium'], ['heavy', 'Heavy']];
@@ -461,7 +470,7 @@ function checkinCard(date) {
   const ci = S.data.checkins[date];
   const recs = ci ? recsFor(ci, phaseOn(date)) : [];
   if (!ci && noteOnly()) return `<section class="card checkin"><h2>Today's note</h2><button class="btn primary" data-act="checkin" data-date="${date}">Add note</button></section>`;
-  if (!ci) return `<section class="card checkin"><h2>How are you today?</h2><p class="fine">A few quick questions for this part of your cycle. Takes under 30 seconds.</p><button class="btn primary" data-act="checkin" data-date="${date}">Start check-in</button></section>`;
+  if (!ci) return `<button class="card checkin focus" data-act="checkin" data-date="${date}"><span class="ft">How are you today?</span><span class="arrow" aria-hidden="true">→</span></button>`;
   const logged = Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`);
   return `<section class="card checkin"><h2>Today's check-in</h2><p class="fine">${logged.length ? h(logged.join(', ')) : 'No symptoms logged.'}</p>
     ${recs.map(recBlock).join('')}
@@ -473,7 +482,7 @@ function recBlock(r) {
 }
 function foodTeaser() {
   const ph = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular'; const f = T.FOOD[ph];
-  return `<section class="card food-teaser"><h2>Food for now: ${h(f.title.toLowerCase())}</h2><p class="fine">${h(f.why)}</p><button class="btn small" data-tab="food">See foods</button></section>`;
+  return `<button class="card food-teaser" data-tab="food"><span class="badge-soft">Food for now</span><span class="ft">${h(f.title)}</span></button>`;
 }
 const phaseKey = (id) => (['menstruation', 'luteal', 'late', 'fertile', 'follicular'].includes(id) ? id : 'follicular');
 
@@ -641,7 +650,7 @@ function historyView() {
   if (f === 'last3') list = list.slice(0, 3); else if (f === 'last6') list = list.slice(0, 6);
   else if (f === 'year') list = list.filter((x) => diff(today(), x.start) <= 365); else if (/^\d{4}$/.test(f)) list = list.filter((x) => x.start.startsWith(f));
   const stats = p && !p.empty ? `<section class="stats-hero"><div><span class="cap">Average cycle</span><span class="big">${p.cycleLen}<small> days</small></span></div>
-      <div class="r"><span class="cap">Period</span><span class="mid">${plural(p.periodLen, 'day')}</span><span class="cap">±${p.spread} days spread</span></div></section>` : '';
+      <div class="r"><span class="cap">Period</span><span class="mid">${plural(p.periodLen, 'day')}</span><span class="cap">Range ±${plural(p.spread, 'day')}</span></div></section>` : '';
   const expected = p && !p.empty ? p.cycleLen + p.spread : 38;
   const rows = list.map((x) => {
     const c = cycBy[x.start]; const plen = periodLength(x) || (p && !p.empty ? p.periodLen : CONST.DEFAULT_PERIOD);
@@ -1388,5 +1397,7 @@ function csv() {
 for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
 // I3: a redraw held back while she was typing is done once the field loses focus
+document.addEventListener('focusin', (e) => { if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && !/checkbox|radio|file/.test(e.target.type)) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => document.body.classList.remove('typing'), 50));
 document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
 window.__cycle = { busyEditing, softRender, S, predict, VERSION, render, findForRestore, restoreFlow, recompute, persist };
