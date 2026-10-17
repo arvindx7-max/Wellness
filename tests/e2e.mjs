@@ -41,7 +41,12 @@ async function setup(p) {
   try { await setupOnce(p); } catch (e) {
     if (!/Timeout/.test(String(e.message))) throw e;
     await p.evaluate(() => new Promise((res) => { const r = indexedDB.deleteDatabase('cycle-wellness'); r.onsuccess = r.onerror = r.onblocked = () => res(); }));
-    await p.goto(BASE); await setupOnce(p);
+    await p.goto(BASE);
+    try { await setupOnce(p); } catch (e2) {
+      // say what the screen showed, so a failure on GitHub can be read without screenshots
+      const seen = await p.evaluate(() => `view=${window.__cycle && window.__cycle.S.view} text=${document.body.innerText.replace(/\s+/g, ' ').slice(0, 200)}`).catch(() => 'page not readable');
+      throw new Error(`${e2.message.split('\n')[0]} | screen: ${seen}`);
+    }
   }
 }
 async function setupOnce(p) {
@@ -66,7 +71,9 @@ for (const eng of want) {
   const browser = await ENGINES[eng].launch();
   for (const [size, [w, h]] of Object.entries(SIZES)) for (const scheme of ['light', 'dark']) {
     const tag = `${eng} ${size} ${scheme}`;
-    const ctx = await browser.newContext({ locale: 'en-GB', viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block' });
+    // WebKit on GitHub's shared runners can stall after many pages in one browser: give each WebKit page its own browser
+    const own = eng === 'webkit' ? await ENGINES[eng].launch() : null;
+    const ctx = await (own || browser).newContext({ locale: 'en-GB', viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block' });
     await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const p = await ctx.newPage(); await p.clock.install({ time: new Date(NOW) });
     p.on('pageerror', (e) => errors.push(`${tag}: ${e.message}`));
@@ -115,7 +122,7 @@ for (const eng of want) {
     const rv = await p.evaluate(() => ({ hscroll: document.documentElement.scrollWidth > innerWidth + 1, rows: document.querySelectorAll('#sheet .irow').length, ticks: document.querySelectorAll('#sheet .irow input[data-act=row-tick]').length, replace: !!document.querySelector('#sheet [data-act=import-replace]') }));
     ok(`${tag} v3.2 review: ticks and replace option, no sideways scrolling`, !rv.hscroll && rv.rows === 3 && rv.ticks === 3 && rv.replace, JSON.stringify(rv));
     await p.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v32-review.png`) });
-    await ctx.close();
+    await ctx.close(); if (own) await own.close();
   }
   // Core flows once per engine (phone size)
   const ctx = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
