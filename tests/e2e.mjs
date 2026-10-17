@@ -44,7 +44,7 @@ async function setup(p) {
     await p.goto(BASE);
     try { await setupOnce(p); } catch (e2) {
       // say what the screen showed, so a failure on GitHub can be read without screenshots
-      const seen = await p.evaluate(() => `view=${window.__cycle && window.__cycle.S.view} text=${document.body.innerText.replace(/\s+/g, ' ').slice(0, 200)}`).catch(() => 'page not readable');
+      const seen = await p.evaluate(() => `view=${window.__cycle && window.__cycle.S.view} busy=${!document.getElementById('busy').hidden} toast=${(document.getElementById('toast') || {}).textContent || ''} text=${document.body.innerText.replace(/\s+/g, ' ').slice(0, 200)}`).catch(() => 'page not readable');
       throw new Error(`${e2.message.split('\n')[0]} | screen: ${seen}`);
     }
   }
@@ -55,7 +55,12 @@ async function setupOnce(p) {
   await p.fill('input[name=birthYear]', '1990'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
   await p.click('form[data-form=onboard] button:not(.pw-eye)');
   await p.fill('input[name=p1]', PASS); await p.fill('input[name=p2]', PASS); await p.check('input[name=saved]');
-  await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 90000 });
+  // F20: in WebKit on GitHub the submit sometimes does not register: if neither the "Encrypting" indicator nor the app
+  // appears within 20 s, submit once more; while encrypting, wait up to 150 s
+  await p.click('form[data-form=passphrase] button:not(.pw-eye)');
+  const started = () => p.waitForFunction(() => !!document.querySelector('main.screen') || !document.getElementById('busy').hidden, null, { timeout: 20000 }).then(() => true, () => false);
+  if (!(await started())) await p.click('form[data-form=passphrase] button:not(.pw-eye)');
+  await p.waitForSelector('main.screen', { timeout: 150000 });
   for (const [s, e] of PERIODS) {
     await p.click('[data-tab=history]'); await p.click('[data-act=add-past] >> nth=0');
     await p.fill('#sheet input[name=start]', s); await p.fill('#sheet input[name=end]', e); await p.click('#sheet form button:not(.pw-eye)'); await p.waitForTimeout(150);
