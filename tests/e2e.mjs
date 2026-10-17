@@ -27,7 +27,8 @@ const ENGINES = { chromium, webkit };
 const want = (process.env.BROWSERS || 'chromium').split(',');
 let pass = 0, fail = 0; const errors = [];
 const CI = !!process.env.GITHUB_ACTIONS; // in GitHub Actions, failures also show as annotations on the run
-const ok = (name, cond, info = '') => { cond ? pass++ : fail++; if (!cond) { console.log(`FAIL  ${name} ${info}`); if (CI) console.log(`::error::FAIL ${name} ${String(info).slice(0, 300)}`); } };
+let last = 'start';
+const ok = (name, cond, info = '') => { last = name; cond ? pass++ : fail++; if (!cond) { console.log(`FAIL  ${name} ${info}`); if (CI) console.log(`::error::FAIL ${name} ${String(info).slice(0, 300)}`); } };
 const until = (p, fn, arg) => p.waitForFunction(fn, arg, { timeout: 10000 }).then(() => true, () => false);
 // saved AND drawn again: the settings buttons show the new choice only after the app has re-rendered
 const lookIs = (p, want) => until(p, (w) => { const l = (window.__cycle.S.data.settings.look) || {};
@@ -50,6 +51,7 @@ const metrics = (p) => p.evaluate(() => {
   return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, main: m.width, vw: innerWidth, vh: innerHeight, navLeft: nav.left, navW: nav.width, navTop: nav.top };
 });
 
+try {
 for (const eng of want) {
   const browser = await ENGINES[eng].launch();
   for (const [size, [w, h]] of Object.entries(SIZES)) for (const scheme of ['light', 'dark']) {
@@ -125,7 +127,7 @@ for (const eng of want) {
     await c2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c2.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3: ${e.message}`));
     await q.goto(BASE);
-    ok(`${eng} v3: welcome offers a backup start`, await q.isVisible('[data-act=import-start]'));
+    ok(`${eng} v3: welcome offers a backup start`, await q.waitForSelector('[data-act=import-start]', { timeout: 15000 }).then(() => true, () => false));
     ok(`${eng} v3: greyed Drive button is explained`, (await q.isDisabled('[data-act=restore-start]')) && /not available in this copy/.test(await q.textContent('.intro')));
     await q.click('[data-act=import-start]');
     await q.setInputFiles('input[data-act=import-pick]', file('notes.json', '{"hello":1}'));
@@ -177,6 +179,11 @@ for (const eng of want) {
     await c2.close();
   }
   await browser.close();
+}
+} catch (e) {
+  // a crash (for example a timeout) names the last check that ran, so it can be read on GitHub
+  fail++; console.log(`CRASH after "${last}": ${e.message}`);
+  if (CI) console.log(`::error::CRASH after "${last}": ${String(e.message).split('\n').slice(0, 3).join(' | ').slice(0, 500)}`);
 }
 server.close();
 if (errors.length) { fail += errors.length; console.log('PAGE ERRORS', errors); if (CI) for (const e of errors) console.log(`::error::PAGE ERROR ${e.slice(0, 300)}`); }
