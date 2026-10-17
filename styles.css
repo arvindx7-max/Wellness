@@ -322,3 +322,16 @@ details .q { margin-top: 12px; }
   .companion { width: 84px; height: 84px; top: 34px; }
 }
 @media (min-width: 640px) { .hero { padding: 20px 28px 26px; } .companion { width: 140px; height: 140px; top: 48px; right: 28px; } }
+
+/* v3.1 (B7, B8): numbered steps and the import review list */
+.steps { margin: 4px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 21px; }
+.steps li::marker { font-weight: 600; color: var(--accent); }
+.irows { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.irow { background: var(--cell); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.irow label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--label2); min-width: 0; }
+.irow input[type=date] { min-width: 0; width: 100%; background: var(--fill); }
+.irow .link { grid-column: 1 / -1; justify-self: start; }
+.irow .warn { grid-column: 1 / -1; margin: 0; }
+.sheet-card .irow { background: var(--fill); }
+.sheet-card .irow input[type=date] { background: var(--cell); }
+.intro textarea { background: var(--cell); width: 100%; box-sizing: border-box; }
