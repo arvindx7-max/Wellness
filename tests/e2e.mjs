@@ -64,7 +64,7 @@ for (const eng of want) {
   const browser = await ENGINES[eng].launch();
   for (const [size, [w, h]] of Object.entries(SIZES)) for (const scheme of ['light', 'dark']) {
     const tag = `${eng} ${size} ${scheme}`;
-    const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block' });
+    const ctx = await browser.newContext({ locale: 'en-GB', viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block' });
     await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const p = await ctx.newPage(); await p.clock.install({ time: new Date(NOW) });
     p.on('pageerror', (e) => errors.push(`${tag}: ${e.message}`));
@@ -114,7 +114,7 @@ for (const eng of want) {
     await ctx.close();
   }
   // Core flows once per engine (phone size)
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+  const ctx = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
   const p = await ctx.newPage(); await p.clock.install({ time: new Date(NOW) }); p.on('pageerror', (e) => errors.push(`${eng} flows: ${e.message}`));
   await p.goto(BASE); await setup(p);
@@ -141,7 +141,7 @@ for (const eng of want) {
   {
     const backup = (periods) => JSON.stringify({ app: 'cycle', v: 1, settings: { updatedAt: 1 }, periods: periods.map(([s, e], i) => ({ id: `t${i}`, start: s, end: e, updatedAt: 1 })), days: {}, checkins: {}, acks: {} });
     const file = (name, text) => ({ name, mimeType: 'application/json', buffer: Buffer.from(text) });
-    const c2 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c2 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c2.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3: ${e.message}`));
     await q.goto(BASE);
@@ -213,7 +213,7 @@ for (const eng of want) {
     const toastText = (p) => p.evaluate(() => document.querySelector('#toast').textContent);
 
     // B8: restore screen on a first start
-    const c3 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c3 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c3.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
     const r3 = await c3.newPage(); await r3.clock.install({ time: new Date(NOW) }); r3.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
     await r3.goto(BASE); await r3.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 });
@@ -232,7 +232,7 @@ for (const eng of want) {
     await c3.close();
 
     // B7 at start-up: paste, review list, edit, continue
-    const c4 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const c4 = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c4.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c4.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
     const seen = []; q.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') seen.push(m.text().slice(0, 160)); }); q.on('requestfailed', (r) => seen.push(`request failed ${r.url().slice(-40)}`)); q.on('worker', () => seen.push('worker started'));

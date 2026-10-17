@@ -85,14 +85,32 @@ export async function updateVault(token, id, text) {
 }
 
 // ---------- merge: newest change wins per record; deletions are kept as tombstones so they sync ----------
+// v4 (G4-1): a day holds several separate entries (bleeding, ovulation tests, sex life), each with its own time,
+// so two devices logging different things on the same day both keep theirs. Fields and keys this version does
+// not know are kept, so a newer version's data survives a sync through this one.
+export const SCHEMA = 4;
+const DAY_FIELDS = ['flow', 'ovu', 'sex'];
+const at = (d, f) => (d && (d[f + 'At'] ?? (d[f] !== undefined ? d.updatedAt : 0))) || 0;
+export function mergeDay(a, b) {
+  if (!a) return b; if (!b) return a;
+  const newer = (b.updatedAt || 0) > (a.updatedAt || 0) ? b : a;
+  const out = { ...(newer === a ? b : a), ...newer };
+  for (const f of DAY_FIELDS) {
+    const src = at(b, f) > at(a, f) ? b : at(a, f) > at(b, f) ? a : newer;
+    if (src[f] === undefined) { delete out[f]; delete out[f + 'At']; } else { out[f] = src[f]; out[f + 'At'] = at(src, f); }
+  }
+  out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
+  return out;
+}
 export function merge(local, remote) {
   if (!remote) return local;
   const newer = (a, b) => ((b && b.updatedAt) || 0) > ((a && a.updatedAt) || 0) ? b : a;
   const byId = {};
   for (const p of [...(local.periods || []), ...(remote.periods || [])]) byId[p.id] = byId[p.id] ? newer(byId[p.id], p) : p;
   const days = { ...(local.days || {}) };
-  for (const [d, v] of Object.entries(remote.days || {})) days[d] = days[d] ? newer(days[d], v) : v;
+  for (const [d, v] of Object.entries(remote.days || {})) days[d] = mergeDay(days[d], v);
   const perKey = (a = {}, b = {}) => { const o = { ...a }; for (const [k, v] of Object.entries(b)) o[k] = o[k] ? newer(o[k], v) : v; return o; };
-  return { app: 'cycle', v: 1, settings: newer(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
+  return { ...remote, ...local, app: 'cycle', v: 1, schema: Math.max(SCHEMA, local.schema || 0, remote.schema || 0),
+    settings: newer(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
     checkins: perKey(local.checkins, remote.checkins), acks: perKey(local.acks, remote.acks) };
 }

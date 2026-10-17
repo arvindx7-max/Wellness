@@ -27,9 +27,20 @@ const S = {
   sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0, imp: null,
   cloud: { token: null, status: 'off', msg: '', busy: false },
 };
-const fresh = () => ({ app: 'cycle', v: 1, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
+const fresh = () => ({ app: 'cycle', v: 1, schema: C.SCHEMA, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
 // v1 data has no check-ins or acknowledgements yet
-const upgrade = (d) => ({ ...d, days: d.days || {}, checkins: d.checkins || {}, acks: d.acks || {} });
+const upgrade = (d) => ({ ...d, schema: Math.max(C.SCHEMA, d.schema || 0), days: d.days || {}, checkins: d.checkins || {}, acks: d.acks || {} });
+// v4: one field of a day (flow, ovu = ovulation tests, sex) changes on its own, with its own time, so sync can merge per field
+function setDay(date, field, value) {
+  const now = Date.now(); S.data.days[date] = { ...(S.data.days[date] || {}), [field]: value, [field + 'At']: now, updatedAt: now };
+}
+// v4 (R5): date format and first day of the week; neutral defaults from the device's language
+const usLocale = () => /^en-US/i.test((navigator.languages && navigator.languages[0]) || navigator.language || '');
+function display() { const d = (S.data && S.data.settings && S.data.settings.display) || {}; return { dateFmt: d.dateFmt || (usLocale() ? 'mdy' : 'dmy'), weekStart: d.weekStart || (usLocale() ? 'sun' : 'mon') }; }
+// v4 (R6): what she chose to hide; hiding never deletes anything
+function hidden(k) { const x = (S.data && S.data.settings && S.data.settings.hide) || {}; return !!x[k]; }
+// v4 (R10): age from the birth year, always current; only used for age-dependent notes
+function age() { const y = S.data && S.data.settings && +S.data.settings.birthYear; return y ? +today().slice(0, 4) - y : null; }
 const today = () => localToday();
 const uid = () => `p${Date.now().toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -39,7 +50,9 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 function fmt(d, withYear = false) {
   if (!d) return '';
-  const [y, m, dd] = d.split('-').map(Number);
+  const [y, m, dd] = d.split('-').map(Number); const f = display().dateFmt;
+  if (f === 'num') return `${String(dd).padStart(2, '0')}/${String(m).padStart(2, '0')}${withYear ? `/${y}` : ''}`;
+  if (f === 'mdy') return `${MONTHS[m - 1].slice(0, 3)} ${dd}${withYear ? `, ${y}` : ''}`;
   return `${dd} ${MONTHS[m - 1].slice(0, 3)}${withYear ? ` ${y}` : ''}`;
 }
 const weekday = (d) => WD[(new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay() + 6) % 7];
@@ -193,7 +206,7 @@ function faceIdOfferView() {
 function restoreView() {
   const st = S.restore || {};
   let body;
-  const who = st.token && st.token.email ? `<p class="fine">Signed in as <strong>${h(st.token.email)}</strong>. <button class="link" data-act="restore-switch">Use a different Google account</button></p>` : '';
+  const who = st.token && st.token.token ? `<p class="fine">${st.token.email ? `Signed in as <strong>${h(st.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="restore-switch">Use a different Google account</button></p>` : '';
   if (!st.token) body = `<ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account where Cycle keeps its encrypted vault. It is the account used when sync was turned on.</li><li>Enter the vault passphrase.</li></ol><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
   else if (!st.fileId) body = `<div class="notice"><p><strong>No Cycle vault was found in this Google account.</strong></p>
       <p class="fine">A vault exists only after Cycle sync has been turned on once, on a device that already has your data. Until then there is nothing to restore.</p></div>
@@ -577,7 +590,7 @@ function describe(i) {
 function calendarView() {
   const t = today(); const ym = S.month || t.slice(0, 7);
   const [y, m] = ym.split('-').map(Number);
-  const first = `${ym}-01`; const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
+  const first = `${ym}-01`; const sun = display().weekStart === 'sun'; const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + (sun ? 0 : 6)) % 7;
   const daysIn = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const cells = [];
   for (let i = 0; i < lead; i++) cells.push('<span class="cal-pad"></span>');
@@ -588,7 +601,7 @@ function calendarView() {
   const wording = !!S.data.settings.wording;
   return `${topbar('Calendar')}
   <div class="month-nav"><button class="icon-btn" data-act="month" data-step="-1" aria-label="Previous month">‹</button><h2>${MONTHS[m - 1]} ${y}</h2><button class="icon-btn" data-act="month" data-step="1" aria-label="Next month">›</button></div>
-  <div class="cal-grid">${WD.map((w) => `<span class="cal-wd">${w.slice(0, 2)}</span>`).join('')}${cells.join('')}</div>
+  <div class="cal-grid">${(sun ? ['Sun', ...WD.slice(0, 6)] : WD).map((w) => `<span class="cal-wd">${w.slice(0, 2)}</span>`).join('')}${cells.join('')}</div>
   ${ym !== t.slice(0, 7) ? '<button class="link center" data-act="month-today">Back to this month</button>' : ''}
   <section class="legend">
     <span><i class="lg m-period"></i>Period</span><span><i class="lg m-pred"></i>Predicted period</span>
@@ -684,7 +697,7 @@ function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
   const c = S.cloud, m = S.meta.cloud;
   let body;
-  const who = c.token && c.token.email ? `<p class="fine">Signed in as <strong>${h(c.token.email)}</strong>. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
+  const who = tokenOk() ? `<p class="fine">${c.token.email ? `Signed in as <strong>${h(c.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
   if (c.existing) body = `${who}<p class="fine">A Cycle vault already exists in this Google account. Choose one:</p>
     <ol class="steps"><li><strong>Join it:</strong> enter that vault's passphrase below. The ${plural(livePeriods(S.data.periods).length, 'period')} on this device are merged into the vault, and this device switches to the vault's passphrase.</li>
       <li><strong>Wrong account?</strong> Tap <em>Use a different Google account</em> above.</li>
@@ -820,7 +833,7 @@ async function endPeriod(date) {
   await persist(); S.sheet = null; render(); toast(`Period end saved: ${fmt(date)}`);
 }
 async function setFlow(date, flow) {
-  S.data.days[date] = { flow, updatedAt: Date.now() };
+  setDay(date, 'flow', flow);
   await persist();
   const info = S.pred && !S.pred.empty ? dayInfo(date, S.pred, S.data.periods, S.data.days) : {};
   if (['light', 'medium', 'heavy'].includes(flow) && !info.logged) { openSheet('confirm-start', { date, flow }); return; }
@@ -891,11 +904,11 @@ document.addEventListener('click', async (e) => {
     else if (a === 'restore-switch') { S.restore = {}; await signIn('restore', 'select_account'); }
     else if (a === 'vault-new') confirmSheet('Start a new vault?', `The vault file already in this Google account is kept, renamed to a backup name, and is not deleted. A new vault is then created from the ${plural(livePeriods(S.data.periods).length, 'period')} on this device, using this device's passphrase. Other devices that used the old vault need Restore from Google Drive with the new passphrase.`, 'Start a new vault', async () => {
       closeSheet(); const old = S.cloud.existing; const stamp = localToday().replace(/-/g, '');
-      await cloudAction('New vault created', async () => { await C.renameFile(S.cloud.token.token, old.id, `cycle-vault-old-${stamp}.json`); S.cloud.existing = null; await createVaultFlow(); });
+      await cloudAction('New vault created', async () => { await C.renameFile(cloudTok(), old.id, `cycle-vault-old-${stamp}.json`); S.cloud.existing = null; await createVaultFlow(); });
     }, true);
     else if (a === 'vault-create') {
       busy(true, 'Checking Google Drive');
-      try { const files = await C.findVault(S.cloud.token.token); busy(false);
+      try { const files = await C.findVault(cloudTok()); busy(false);
         if (files.length) { S.cloud.existing = files[0]; render(); return; } }
       catch (e) { busy(false); throw e; }
       await cloudAction('Vault created', createVaultFlow);
@@ -904,7 +917,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'disconnect') confirmSheet('Stop syncing this device?', 'Your data stays on this device and in Google Drive.', 'Disconnect', async () => {
       S.meta.cloud = null; await kvSet('meta', S.meta); closeSheet(); toast('Sync is off on this device');
     });
-  } catch (err) { console.error(err); toast(err.message || 'Something went wrong.'); }
+  } catch (err) { busy(false); lostSignIn(err); toast(friendly(err)); }
 });
 // B7: the checked list becomes a normal backup; from Settings it is merged (rows already in Cycle are left out), at start-up it needs a passphrase next
 function reviewContinue() {
@@ -1020,7 +1033,7 @@ document.addEventListener('submit', async (e) => {
       if ((fd.get('meds') || '').trim()) ci.meds = fd.get('meds').trim();
       if ((fd.get('note') || '').trim()) ci.note = fd.get('note').trim();
       S.data.checkins[date] = ci;
-      if (fd.has('flow') && fd.get('flow') !== ((S.data.days[date] || {}).flow || 'none')) S.data.days[date] = { flow: fd.get('flow'), updatedAt: Date.now() };
+      if (fd.has('flow') && fd.get('flow') !== ((S.data.days[date] || {}).flow || 'none')) setDay(date, 'flow', fd.get('flow'));
       await persist(); S.sheet = null; render(); window.scrollTo(0, 0); toast('Check-in saved');
     } else if (kind === 'end-earlier') await endPeriod(fd.get('end'));
     else if (kind === 'settings') {
@@ -1033,7 +1046,7 @@ document.addEventListener('submit', async (e) => {
       S.data.settings = { ...S.data.settings, helpline: number ? { name, number } : null, updatedAt: Date.now() };
       await persist(); render(); toast(number ? 'Support line saved' : 'Support line removed');
     }
-  } catch (err) { busy(false); toast(err.message || 'Something went wrong.'); }
+  } catch (err) { busy(false); lostSignIn(err); toast(friendly(err)); }
 });
 
 function busy(on, msg = '') { const b = $('#busy'); b.hidden = !on; b.querySelector('span').textContent = msg; }
@@ -1059,6 +1072,18 @@ async function unlockFaceId() {
 // ---------------- Google Drive sync ----------------
 const cloudReady = () => !!(cfg.googleClientId && S.meta && S.meta.cloud && S.meta.cloud.fileId && S.key);
 const tokenOk = () => !!(S.cloud.token && S.cloud.token.exp > Date.now());
+// B16 (v4): no Drive call without a valid sign-in; a lost sign-in sends her back one step with a plain message
+const SIGNIN_LOST = 'Your Google sign-in was lost. Tap Sign in with Google again.';
+function needToken(t) { if (!t || !t.token || (t.exp && t.exp <= Date.now())) throw Object.assign(new Error(SIGNIN_LOST), { code: 'signin' }); return t.token; }
+const cloudTok = () => needToken(S.cloud.token);
+const restoreTok = () => needToken(S.restore && S.restore.token);
+// raw program errors are never shown to her (they are logged instead)
+function friendly(err) { console.error(err); return err instanceof TypeError || err instanceof ReferenceError || !err.message ? 'Something went wrong. Please try again.' : err.message; }
+function lostSignIn(err) {
+  if (err.code !== 'signin' && err.code !== 401) return false;
+  if (S.view === 'restore') S.restore = {}; else { S.cloud.token = null; kvSet('gtoken', null); }
+  render(); return true;
+}
 // B10: the first sign-in always lets her choose the Google account; a later sign-in to an existing vault stays silent
 async function signIn(next, prompt = 'select_account') {
   if (!cfg.googleClientId) { toast('Google sync is not set up in config.js.'); return; }
@@ -1070,11 +1095,15 @@ async function signIn(next, prompt = 'select_account') {
   else { render(); if (cloudReady()) await syncNow(); }
 }
 async function findForRestore() {
-  const files = await C.findVault(S.restore.token.token);
-  S.restore.fileId = files.length ? files[0].id : null; render();
+  const st = S.restore; // B16: only the attempt that started the search gets its result
+  busy(true, 'Checking Google Drive');
+  let files;
+  try { files = await C.findVault(restoreTok()); } finally { busy(false); }
+  if (S.restore !== st) return;
+  st.fileId = files.length ? files[0].id : null; render();
 }
 async function restoreFlow(pass) {
-  const tok = S.restore.token.token; const text = await C.download(tok, S.restore.fileId);
+  const tok = restoreTok(); const text = await C.download(tok, S.restore.fileId);
   const head = C.vaultHeader(text); const key = await K.deriveKey(pass, head.salt, head.iter);
   const data = await C.openVault(text, key);
   const meta = await C.fileMeta(tok, S.restore.fileId);
@@ -1086,7 +1115,7 @@ async function restoreFlow(pass) {
 }
 // Join an existing vault (B1) or follow a passphrase change made on another device.
 async function joinVault(pass, fileId) {
-  const tok = S.cloud.token.token; const id = fileId || S.cloud.existing.id;
+  const tok = cloudTok(); const id = fileId || S.cloud.existing.id;
   const text = await C.download(tok, id); const head = C.vaultHeader(text);
   const key = await K.deriveKey(pass, head.salt, head.iter);
   const remote = await C.openVault(text, key);
@@ -1103,18 +1132,18 @@ async function changePassphrase(cur, next) {
   S.meta.salt = salt; S.meta.iter = K.ITER; S.meta.lock = null;
   await kvSet('meta', S.meta); await kvSet('sealed', await K.seal(S.data, S.key));
   if (S.meta.cloud && S.meta.cloud.fileId && tokenOk()) {
-    const res = await C.updateVault(S.cloud.token.token, S.meta.cloud.fileId, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
+    const res = await C.updateVault(cloudTok(), S.meta.cloud.fileId, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
     S.meta.cloud.remoteModified = res.modifiedTime; S.meta.cloud.dirty = false; await kvSet('meta', S.meta);
   } else if (S.meta.cloud && S.meta.cloud.fileId) { S.meta.cloud.dirty = true; await kvSet('meta', S.meta); }
 }
 async function createVaultFlow() {
-  const res = await C.createVault(S.cloud.token.token, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
+  const res = await C.createVault(cloudTok(), await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
   S.meta.cloud = { fileId: res.id, remoteModified: res.modifiedTime, lastSync: new Date().toISOString(), dirty: false };
   await kvSet('meta', S.meta);
 }
 async function cloudAction(done, fn) {
   busy(true, 'Talking to Google Drive');
-  try { await fn(); toast(done); } catch (e) { if (e.code === 401) { S.cloud.token = null; await kvSet('gtoken', null); } toast(e.message); }
+  try { await fn(); toast(done); } catch (e) { if (e.code === 401 || e.code === 'signin') { S.cloud.token = null; await kvSet('gtoken', null); } toast(friendly(e)); }
   finally { busy(false); render(); }
 }
 let pushTimer;
@@ -1127,7 +1156,7 @@ async function syncNow(quiet = false) {
   if (!cloudReady() || S.cloud.busy || S.cloud.status === 'newpass') return;
   if (!tokenOk()) { if (!quiet) toast('Sign in with Google to sync.'); render(); return; }
   S.cloud.busy = true; if (!quiet) render();
-  const tok = S.cloud.token.token, m = S.meta.cloud;
+  const tok = cloudTok(), m = S.meta.cloud;
   try {
     const fm = await C.fileMeta(tok, m.fileId);
     if (fm.modifiedTime !== m.remoteModified) {
@@ -1191,4 +1220,4 @@ for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEv
 document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
 // I3: a redraw held back while she was typing is done once the field loses focus
 document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
-window.__cycle = { busyEditing, softRender, S, predict, VERSION, render };
+window.__cycle = { busyEditing, softRender, S, predict, VERSION, render, findForRestore, restoreFlow, recompute, persist };
