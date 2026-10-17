@@ -113,7 +113,7 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
     nextRange: [addDays(cur.nextStart, -spread), addDays(cur.nextStart, spread)],
     ovulation: cur.ovulation, peak: cur.peak, possible: cur.possible,
     cycles: cyclesOut, state: stateOn(today, { last, periodLen, cur, spread, days }),
-    notes: notesFor(cyc, cur, today, spread),
+    notes: notesFor(cyc, cur, today, spread, last ? last.start : null),
   };
 }
 
@@ -140,14 +140,14 @@ function stateOn(today, { last, periodLen, cur, spread, days }) {
   const base = { cycleDay, daysToNext: diff(cur.nextStart, today) };
   if (cycleDay < 1) return { ...base, id: 'before', label: 'Before your first logged period' };
   if (diff(pEnd, today) >= 0) return { ...base, id: 'menstruation', label: 'Period', periodOpen: !last.end };
-  if (diff(today, addDays(cur.nextStart, spread)) > 0) return { ...base, id: 'late', label: 'Period late', daysLate: diff(today, cur.nextStart) };
+  if (diff(today, addDays(cur.nextStart, spread)) > 0) return { ...base, id: 'late', label: diff(today, cur.nextStart) > CONST.VALID_MAX ? 'No recent period logged' : 'Period late', daysLate: diff(today, cur.nextStart), stale: diff(today, cur.nextStart) > CONST.VALID_MAX, lastStart: last.start };
   if (within(today, cur.possible)) return { ...base, id: 'fertile', label: 'Fertile window', peak: within(today, cur.peak) };
   if (diff(cur.possible[0], today) > 0) return { ...base, id: 'follicular', label: 'Follicular phase' };
   return { ...base, id: 'luteal', label: 'Luteal phase (estimated)' };
 }
 
 // 3.6: rules and notes.
-function notesFor(cyc, cur, today, spread) {
+function notesFor(cyc, cur, today, spread, lastStart) {
   const notes = [];
   for (const c of cyc) if (!c.valid && !c.excluded) notes.push({ id: `check-${c.start}`, kind: 'check', cycleStart: c.start,
     text: `The cycle starting ${c.start} is ${c.length} days long. Did you miss logging a period? It is left out of predictions until you fix or confirm it.` });
@@ -160,7 +160,9 @@ function notesFor(cyc, cur, today, spread) {
     text: `Your last two cycles (${b.length} and ${a.length} days) were outside the usual 24–38 days. Consider discussing this with a doctor at your next visit.` });
   else if (a && out(a)) notes.push({ id: 'info-range', kind: 'info',
     text: `Your last cycle was ${a.length} days, outside the usual 24–38 days. One cycle like this is common; the app will tell you if it happens twice in a row.` });
-  if (diff(today, addDays(cur.nextStart, spread)) > 0) notes.push({ id: 'late', kind: 'late',
+  if (diff(today, addDays(cur.nextStart, spread)) > CONST.VALID_MAX) notes.push({ id: 'late', kind: 'late',
+    text: `No period has been logged since ${lastStart}. If you have had periods since, add them with "Started on another day".` });
+  else if (diff(today, addDays(cur.nextStart, spread)) > 0) notes.push({ id: 'late', kind: 'late',
     text: `Your period is ${diff(today, cur.nextStart)} days late. Did your period start on an earlier date? You can add it now. If pregnancy is possible, take a home test.` });
   return notes;
 }

@@ -9,7 +9,7 @@ import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
 import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v3.1';
+export const VERSION = 'v3.2';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -83,11 +83,26 @@ function applyLook() {
   const dark = l.mode === 'dark' || (l.mode === 'auto' && sysDark());
   const t = TH.THEMES[l.theme] || TH.THEMES.tide; const [a, b] = dark ? t.dark : t.light; const ac = dark ? t.accent[1] : t.accent[0];
   r.dataset.mode = l.mode;
+  // B13: the browser bar follows the chosen Light/Dark, not only the phone's setting
+  const bar = l.mode === 'auto' ? null : (dark ? '#000000' : '#F2F2F7');
+  for (const id of ['tc-light', 'tc-dark']) { const m = document.getElementById(id); if (m) { m.content = bar || (id === 'tc-dark' ? '#000000' : '#F2F2F7'); if (bar) m.removeAttribute('media'); else m.setAttribute('media', id === 'tc-dark' ? '(prefers-color-scheme: dark)' : '(prefers-color-scheme: light)'); } }
   for (const [k, v] of [['--h1', a], ['--h2', b], ['--accent', ac], ['--accent-tint', TH.tint(ac, dark ? 0.22 : 0.12)], ['--on-accent', dark ? TH.ON_ACCENT.dark : TH.ON_ACCENT.light]]) r.style.setProperty(k, v);
+}
+
+// B14: a background refresh (sync finished, app came back) must never redraw while she is typing or a sheet is open
+function busyEditing() {
+  const a = document.activeElement;
+  return !!S.sheet || !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || S.view !== 'app';
+}
+function softRender() {
+  if (!busyEditing()) { render(); return; }
+  S.redrawLater = true;
+  for (const el of document.querySelectorAll('.pill[data-tab="settings"]')) el.outerHTML = syncPill();
 }
 
 // ---------------- render ----------------
 function render() {
+  S.redrawLater = false;
   applyLook();
   const app = $('#app');
   if (S.view === 'welcome') app.innerHTML = welcomeView();
@@ -170,6 +185,7 @@ function faceIdOfferView() {
   return `<section class="intro form-page">
     <h1>Open with Face ID?</h1>
     <p class="lede">Instead of typing the passphrase each time, unlock Cycle with Face ID or Touch ID. Your data stays encrypted; Face ID only unlocks the key.</p>
+    <ol class="steps"><li>Tap <strong>Use Face ID</strong>.</li><li>Approve Face ID or Touch ID when your device asks.</li><li>If nothing appears, click or tap the page once and tap <strong>Use Face ID</strong> again.</li></ol>
     <button class="btn primary wide" data-act="faceid-setup">Use Face ID</button>
     <button class="btn wide" data-act="faceid-skip">Not now</button>
   </section>`;
@@ -177,7 +193,8 @@ function faceIdOfferView() {
 function restoreView() {
   const st = S.restore || {};
   let body;
-  if (!st.token) body = `<p class="lede">Sign in with the Google account where Cycle keeps its encrypted vault.</p><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
+  const who = st.token && st.token.email ? `<p class="fine">Signed in as <strong>${h(st.token.email)}</strong>. <button class="link" data-act="restore-switch">Use a different Google account</button></p>` : '';
+  if (!st.token) body = `<ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account where Cycle keeps its encrypted vault. It is the account used when sync was turned on.</li><li>Enter the vault passphrase.</li></ol><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
   else if (!st.fileId) body = `<div class="notice"><p><strong>No Cycle vault was found in this Google account.</strong></p>
       <p class="fine">A vault exists only after Cycle sync has been turned on once, on a device that already has your data. Until then there is nothing to restore.</p></div>
     <h2>To create the vault</h2>
@@ -187,17 +204,19 @@ function restoreView() {
       <li>On any other device, tap <strong>Restore from Google Drive</strong>.</li></ol>
     ${S.meta ? '' : '<button class="btn primary wide" data-act="start">Set up on this phone</button>'}
     <button class="btn wide" data-act="import-start">Start from a backup file</button>
-    <p class="fine">Signed in with the wrong Google account? Tap Back, then Restore from Google Drive, and choose the other account.</p>
+    <p class="fine">Wrong Google account? Tap <strong>Use a different Google account</strong> above and choose the other one.</p>
     <button class="btn small" data-act="restore-retry">Search again</button>`;
-  else body = `<p class="lede">Vault found. Enter its passphrase to bring your data to this device.</p>
+  if (st.token && !st.fileId) body = who + body;
+  else body = `${who}<p class="lede">Vault found in this account. Enter its passphrase to bring your data to this device.</p>
     <form class="stack" data-form="restore">${USER}${pw('p', 'Vault passphrase', 'current-password', true, 0)}<button class="btn primary wide">Unlock and restore</button></form>
-    ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}`;
+    ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}
+    <p class="fine">Not your vault, or the passphrase is lost? Tap <strong>Use a different Google account</strong> above. If the passphrase is lost for good, the vault cannot be opened; set Cycle up again from a backup file, then start a new vault in Settings.</p>`;
   return `<section class="intro form-page"><h1>Restore from Google Drive</h1>${body}<button class="link" data-act="restore-cancel">Back</button></section>`;
 }
 // ---------------- B1: forgot passphrase ----------------
 function forgotView() {
   return `<section class="intro form-page"><h1>Forgot your passphrase?</h1>
-    <p class="lede">The passphrase cannot be recovered or reset, by you or anyone else. That is what keeps your data private. You can still get going again:</p>
+    <p class="lede">The passphrase cannot be recovered or reset, by you or anyone else. That is what keeps your data private. You can still get going again. Try these in order:</p>
     <div class="notice"><p><strong>First, check the other place.</strong> If you set Cycle up from the Home Screen icon, open it from there; if you used Safari, open it in Safari. Your older data may be there, under your older passphrase.</p></div>
     ${cfg.googleClientId ? '<button class="btn wide" data-act="restore-start">Restore from Google Drive</button><p class="fine">Needs the passphrase of your Drive vault.</p>' : ''}
     <button class="btn wide" data-act="import-start">Start again from a backup file</button><p class="fine">Uses a backup you exported earlier; you choose a new passphrase.</p>
@@ -229,16 +248,17 @@ function reviewBody() {
   const m = S.imp; const inPage = S.view === 'import';
   const rows = m.rows.map((r, i) => {
     const close = closeToPrev(m.rows, i);
-    return `<li class="irow"><label>Start<input type="date" name="s${i}" value="${h(r.start)}" max="${today()}" data-act="row-start" data-i="${i}"></label>
+    return `<li class="irow ${r.off ? 'off' : ''}"><label class="tick"><input type="checkbox" data-act="row-tick" data-i="${i}" ${r.off ? '' : 'checked'}> Use this period</label><label>Start<input type="date" name="s${i}" value="${h(r.start)}" max="${today()}" data-act="row-start" data-i="${i}"></label>
       <label>End (optional)<input type="date" name="e${i}" value="${h(r.end)}" max="${today()}" data-act="row-end" data-i="${i}"></label>
       <button type="button" class="link" data-act="row-del" data-i="${i}" aria-label="Remove this period">Remove</button>
-      ${close ? CLOSE_NOTE : ''}</li>`;
+      ${r.preg ? '<p class="fine pregnote">The report marks this cycle as a pregnancy. Untick it if this was not a period.</p>' : ''}${close ? CLOSE_NOTE : ''}</li>`;
   }).join('');
   return `<div class="notice"><p><strong>${plural(m.rows.length, 'period')} found</strong> in ${h(m.source)}.</p>
       <p class="fine">Nothing is stored yet. The list is a suggestion: dates in other apps are laid out differently, so look at every row.</p></div>
-    <ol class="steps"><li>Check each Start and End date. Tap a date to change it.</li><li>Tap <strong>Remove</strong> on rows that are not a period.</li><li>Tap <strong>Add a period</strong> for any that are missing.</li><li>Tap <strong>${inPage ? 'Continue' : 'Next'}</strong>.</li></ol>
+    <ol class="steps"><li>Check each Start and End date. Tap a date to change it.</li><li>Untick <strong>Use this period</strong>, or tap <strong>Remove</strong>, on rows that are not a period.</li><li>Tap <strong>Add a period</strong> for any that are missing.</li><li>Tap <strong>${inPage ? 'Continue' : 'Next'}</strong>.</li></ol>
     ${m.ambiguous ? `<p class="fine">Dates such as 05/06/2026 can be read two ways. Cycle read them as ${m.order === 'mdy' ? 'month/day' : 'day/month'}. <button class="btn small" data-act="import-order" data-order="${m.order === 'mdy' ? 'dmy' : 'mdy'}">Read as ${m.order === 'mdy' ? 'day/month' : 'month/day'} instead</button> (this starts the list again)</p>` : ''}
     ${m.skipped ? `<p class="fine">${plural(m.skipped, 'date')} without a year or with an impossible day ${m.skipped === 1 ? 'was' : 'were'} skipped.</p>` : ''}
+    ${!inPage && livePeriods(S.data.periods).length ? `<label class="replace-opt"><input type="checkbox" data-act="import-replace" ${m.replace ? 'checked' : ''}> <span><strong>Replace my periods with this list</strong><br><span class="fine">Use this when Cycle already holds wrong or extra periods. Your ${plural(livePeriods(S.data.periods).length, 'current period')} will be removed first (you will see the count before anything changes).</span></span></label>` : ''}
     <ul class="irows">${rows}</ul>
     <div class="stack-btns"><button class="btn" data-act="row-add">Add a period</button><button class="btn primary" data-act="review-continue">${inPage ? 'Continue' : 'Next'}</button>
       <button class="btn" data-act="import-reset">${inPage ? 'Choose another file' : 'Cancel'}</button></div>`;
@@ -316,7 +336,8 @@ function todayView() {
   const st = p.state;
   const wording = !!S.data.settings.wording;
   let sub;
-  if (st.id === 'late') sub = `Period ${plural(st.daysLate, 'day')} late`;
+  if (st.id === 'late' && st.stale) sub = `No period logged since ${fmt(st.lastStart)}`;
+  else if (st.id === 'late') sub = `Period ${plural(st.daysLate, 'day')} late`;
   else if (st.daysToNext === 0) sub = 'Period expected today';
   else if (st.daysToNext > 0) sub = `Next period in ${plural(st.daysToNext, 'day')}`;
   else sub = 'Next period expected now';
@@ -357,13 +378,14 @@ function todayView() {
 function heroView(p, btn, t) {
   const st = p.state, L = look();
   let lead, big;
-  if (st.id === 'late') { lead = 'Period late by'; big = plural(st.daysLate, 'day'); }
+  if (st.id === 'late' && st.stale) { lead = 'No period logged since'; big = fmt(st.lastStart); }
+  else if (st.id === 'late') { lead = 'Period late by'; big = plural(st.daysLate, 'day'); }
   else if (st.daysToNext === 0) { lead = 'Period expected'; big = 'today'; }
   else if (st.daysToNext > 0) { lead = 'Next period in'; big = plural(st.daysToNext, 'day'); }
   else { lead = 'Period expected'; big = 'now'; }
   const wording = !!S.data.settings.wording;
   const line = st.id === 'fertile' ? (wording ? (st.peak ? 'High chance of pregnancy' : 'Higher chance of pregnancy') : (st.peak ? 'Peak fertile days (estimated)' : 'Possible fertile days (estimated)'))
-    : st.id === 'late' ? `Expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}` : `Estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}`;
+    : st.id === 'late' && st.stale ? 'Add your recent periods to get predictions again' : st.id === 'late' ? `Expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}` : `Estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}`;
   const start = p.lastStart, total = Math.max(diff(p.nextStart, start), 1);
   const per = p.lastPeriod.end ? diff(p.lastPeriod.end, start) + 1 : p.periodLen;
   const phase = st.id === 'menstruation' ? 'period' : st.id === 'fertile' ? 'fertile' : st.id === 'luteal' || st.id === 'late' ? 'luteal' : 'follicular';
@@ -662,16 +684,20 @@ function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
   const c = S.cloud, m = S.meta.cloud;
   let body;
-  if (c.existing) body = `<p class="fine">A Cycle vault already exists in this Google Drive. Join it instead of creating a second one: enter that vault's passphrase. The data on this device is merged into it, and this device switches to the vault's passphrase.</p>
+  const who = c.token && c.token.email ? `<p class="fine">Signed in as <strong>${h(c.token.email)}</strong>. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
+  if (c.existing) body = `${who}<p class="fine">A Cycle vault already exists in this Google account. Choose one:</p>
+    <ol class="steps"><li><strong>Join it:</strong> enter that vault's passphrase below. The ${plural(livePeriods(S.data.periods).length, 'period')} on this device are merged into the vault, and this device switches to the vault's passphrase.</li>
+      <li><strong>Wrong account?</strong> Tap <em>Use a different Google account</em> above.</li>
+      <li><strong>Passphrase lost?</strong> Tap <em>Start a new vault</em>. The old file is kept under a backup name.</li></ol>
     <form class="stack" data-form="vault-join">${USER}${pw('p', "Vault's passphrase", 'current-password', false, 0)}<button class="btn primary">Join vault</button></form>
-    <p class="fine">Don't know that passphrase any more? Delete ${C.VAULT_NAME} in Google Drive first, then create a new vault here.</p><button class="link" data-act="vault-join-cancel">Cancel</button>`;
-  else if (m && m.fileId && c.status === 'newpass') body = `<p class="fine">The vault passphrase was changed on another device. Enter the new passphrase to keep syncing.</p>
+    <button class="btn danger wide" data-act="vault-new">Start a new vault</button><button class="link" data-act="vault-join-cancel">Cancel</button>`;
+  else if (m && m.fileId && c.status === 'newpass') body = `<p class="fine">The vault passphrase was changed on another device.</p><ol class="steps"><li>Enter the new vault passphrase below.</li><li>Tap <strong>Unlock vault</strong>.</li></ol>
     <form class="stack" data-form="vault-newpass">${USER}${pw('p', 'New vault passphrase', 'current-password', false, 0)}<button class="btn primary">Unlock vault</button></form>`;
   else if (!m || !m.fileId) body = tokenOk()
-    ? '<p class="fine">Signed in. Create the encrypted vault in your Google Drive. It uses your Cycle passphrase.</p><button class="btn primary" data-act="vault-create">Create vault</button>'
-    : '<p class="fine">Keep an encrypted copy in your own Google Drive, so your data survives a lost phone and appears on your other devices.</p><button class="btn primary" data-act="gsignin">Sign in with Google</button>';
+    ? `${who || '<p class="fine">Signed in.</p>'}<p class="fine">Create the encrypted vault in your Google Drive. It uses your Cycle passphrase.</p><button class="btn primary" data-act="vault-create">Create vault</button>`
+    : '<p class="fine">Keep an encrypted copy in your own Google Drive, so your data survives a lost phone and appears on your other devices.</p><ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account to use. Use the same account on every device.</li><li>Tap <strong>Create vault</strong> (or enter the passphrase if a vault already exists).</li></ol><button class="btn primary" data-act="gsignin">Sign in with Google</button>';
   else if (!tokenOk()) body = `<p class="fine">Google sign-in lasts about an hour. Sign in again to sync${m.dirty ? '; your latest changes are waiting' : ''}.</p><button class="btn primary" data-act="gsignin">Sign in again</button>`;
-  else body = `<p class="fine">${c.status === 'error' ? `<span class="bad">${h(c.msg)}</span> ` : ''}Encrypted vault in your Google Drive (${C.VAULT_NAME}). Changes sync automatically.${m.lastSync ? ` Last sync ${fmtTime(m.lastSync)}.` : ''}</p>
+  else body = `${who}<p class="fine">${c.status === 'error' ? `<span class="bad">${h(c.msg)}</span> ` : ''}Encrypted vault in your Google Drive (${C.VAULT_NAME}). Changes sync automatically.${m.lastSync ? ` Last sync ${fmtTime(m.lastSync)}.` : ''}</p>
     <div class="row"><button class="btn primary" data-act="sync-now">Sync now</button><button class="btn danger" data-act="disconnect">Disconnect</button></div>`;
   return `<section class="card"><h2>Google Drive sync</h2>${body}</section>`;
 }
@@ -748,7 +774,7 @@ function sheetBody() {
     if (m.kind === 'vault' && !m.data) return `<h2>Encrypted file</h2>${vaultOpenForm()}<button class="btn wide" data-act="import-cancel">Cancel</button>`;
     return `<h2>Import this backup?</h2><p><strong>${h(backupSummary(m.data))}.</strong></p>
       ${m.skippedKnown ? `<p class="fine">${plural(m.skippedKnown, 'period')} already in Cycle (or overlapping one) left out.</p>` : ''}
-      <p class="fine">It is merged with the data on this device: for each record, the newest version wins.</p>
+      ${m.replaceIds ? `<p class="notice warnbox"><strong>${plural(m.replaceIds.length, 'current period')} will be removed</strong> and replaced by the ${plural(m.data.periods.length, 'period')} in this list. Check-ins and notes stay. The removal also syncs to your Google Drive vault.</p>` : '<p class="fine">It is merged with the data on this device: for each record, the newest version wins.</p>'}
       <div class="stack-btns"><button class="btn primary" data-act="import-confirm">Import</button><button class="btn" data-act="import-cancel">Cancel</button></div>`;
   }
   if (s.name === 'confirm') {
@@ -822,7 +848,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'row-add') { S.imp.rows.push({ start: '', end: '' }); render(); }
     else if (a === 'import-order') { const m = S.imp; S.imp = foundFrom(m.text, m.source, b.dataset.order); render(); }
     else if (a === 'review-continue') reviewContinue();
-    else if (a === 'import-confirm') { const inc = S.imp.data; S.imp = null; S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); toast(`Backup imported: ${plural(livePeriods(inc.periods).length, 'period')}`); }
+    else if (a === 'import-confirm') { const inc = S.imp.data, rm = S.imp.replaceIds; S.imp = null; if (rm) { const now = Date.now(); for (const p of S.data.periods) if (rm.includes(p.id)) Object.assign(p, { deleted: true, updatedAt: now }); } S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); toast(`Backup imported: ${plural(livePeriods(inc.periods).length, 'period')}`); }
     else if (a === 'look-mode' || a === 'look-theme' || a === 'look-companion') await setLook({ [a.slice(5)]: b.dataset.v });
     else if (a === 'note-seen') await setLook({ noteSeen: true });
     else if (a === 'erase-start') { S.view = 'erase'; render(); }
@@ -860,7 +886,13 @@ document.addEventListener('click', async (e) => {
     else if (a === 'wipe') confirmSheet('Delete all data on this device?', 'Everything Cycle stores on this device is removed. Your Google Drive vault, if any, is not touched.', 'Delete everything', async () => {
       await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
     }, true);
-    else if (a === 'gsignin') await signIn('sync');
+    else if (a === 'gsignin') await signIn('sync', S.meta && S.meta.cloud && S.meta.cloud.fileId ? '' : 'select_account');
+    else if (a === 'gswitch') { S.cloud.existing = null; await signIn('sync', 'select_account'); }
+    else if (a === 'restore-switch') { S.restore = {}; await signIn('restore', 'select_account'); }
+    else if (a === 'vault-new') confirmSheet('Start a new vault?', `The vault file already in this Google account is kept, renamed to a backup name, and is not deleted. A new vault is then created from the ${plural(livePeriods(S.data.periods).length, 'period')} on this device, using this device's passphrase. Other devices that used the old vault need Restore from Google Drive with the new passphrase.`, 'Start a new vault', async () => {
+      closeSheet(); const old = S.cloud.existing; const stamp = localToday().replace(/-/g, '');
+      await cloudAction('New vault created', async () => { await C.renameFile(S.cloud.token.token, old.id, `cycle-vault-old-${stamp}.json`); S.cloud.existing = null; await createVaultFlow(); });
+    }, true);
     else if (a === 'vault-create') {
       busy(true, 'Checking Google Drive');
       try { const files = await C.findVault(S.cloud.token.token); busy(false);
@@ -876,7 +908,7 @@ document.addEventListener('click', async (e) => {
 });
 // B7: the checked list becomes a normal backup; from Settings it is merged (rows already in Cycle are left out), at start-up it needs a passphrase next
 function reviewContinue() {
-  const m = S.imp; const rows = m.rows.filter((r) => r.start || r.end).slice().sort((a, b) => (a.start < b.start ? -1 : 1));
+  const m = S.imp; const rows = m.rows.filter((r) => !r.off && (r.start || r.end)).slice().sort((a, b) => (a.start < b.start ? -1 : 1));
   if (!rows.length) { toast('Add at least one period.'); return; }
   for (const r of rows) {
     if (!isDate(r.start)) { toast('Every row needs a start date.'); return; }
@@ -889,15 +921,17 @@ function reviewContinue() {
   }
   let keep = rows;
   if (S.view !== 'import') {
-    keep = rows.filter((r) => !overlapping(r.start, r.end || null));
+    keep = m.replace ? rows : rows.filter((r) => !overlapping(r.start, r.end || null));
     if (!keep.length) { toast('All of these periods are already in Cycle.'); return; }
   }
   const now = Date.now();
-  S.imp = { kind: 'plain', skippedKnown: rows.length - keep.length, data: { app: 'cycle', v: 1, settings: { updatedAt: 0 }, periods: keep.map((r) => ({ id: uid(), start: r.start, end: r.end || null, updatedAt: now })), days: {}, checkins: {}, acks: {} } };
+  S.imp = { kind: 'plain', replaceIds: m.replace && S.view !== 'import' ? livePeriods(S.data.periods).map((x) => x.id) : null, skippedKnown: rows.length - keep.length, data: { app: 'cycle', v: 1, settings: { updatedAt: 0 }, periods: keep.map((r) => ({ id: uid(), start: r.start, end: r.end || null, updatedAt: now })), days: {}, checkins: {}, acks: {} } };
   if (S.view === 'import') render(); else openSheet('import-preview');
 }
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.dataset.act === 'row-tick' && S.imp && S.imp.rows) { S.imp.rows[+el.dataset.i].off = !el.checked; el.closest('.irow').classList.toggle('off', !el.checked); return; }
+  if (el.dataset.act === 'import-replace' && S.imp) { S.imp.replace = el.checked; return; }
   if (el.dataset.act === 'wording') {
     if (el.checked) { el.checked = false; openSheet('wording'); }
     else { S.data.settings = { ...S.data.settings, wording: false, updatedAt: Date.now() }; await persist(); render(); toast('Pregnancy-chance wording is off'); }
@@ -1010,7 +1044,11 @@ function lockApp() { S.key = null; S.data = null; S.pred = null; S.sheet = null;
 async function faceIdSetup() {
   busy(true, 'Waiting for Face ID');
   try { S.meta.lock = await Lock.setup(S.key); await kvSet('meta', S.meta); busy(false); toast('Face ID unlock is on'); S.view = 'app'; render(); }
-  catch (e) { busy(false); toast(e.message); }
+  catch (e) {
+    busy(false); toast(e.message);
+    // I4: the passkey exists but the browser wanted a tap first: the next tap anywhere finishes the setup (once)
+    if (e.retryOnTap && S.view === 'faceid') document.addEventListener('click', (ev) => { if (!ev.target.closest('[data-act=faceid-skip]')) faceIdSetup(); }, { once: true });
+  }
 }
 async function unlockFaceId() {
   busy(true, 'Waiting for Face ID');
@@ -1021,10 +1059,12 @@ async function unlockFaceId() {
 // ---------------- Google Drive sync ----------------
 const cloudReady = () => !!(cfg.googleClientId && S.meta && S.meta.cloud && S.meta.cloud.fileId && S.key);
 const tokenOk = () => !!(S.cloud.token && S.cloud.token.exp > Date.now());
-async function signIn(next) {
+// B10: the first sign-in always lets her choose the Google account; a later sign-in to an existing vault stays silent
+async function signIn(next, prompt = 'select_account') {
   if (!cfg.googleClientId) { toast('Google sync is not set up in config.js.'); return; }
-  if (C.isStandalone()) { C.signInRedirect(cfg.googleClientId, next); return; }
-  const tok = await C.signInWindow(cfg.googleClientId);
+  if (C.isStandalone()) { C.signInRedirect(cfg.googleClientId, next, prompt); return; }
+  const tok = await C.signInWindow(cfg.googleClientId, prompt);
+  tok.email = await C.accountEmail(tok.token).catch(() => '');
   S.cloud.token = tok; await kvSet('gtoken', tok);
   if (next === 'restore') { S.restore = { token: tok }; await findForRestore(); }
   else { render(); if (cloudReady()) await syncNow(); }
@@ -1105,7 +1145,7 @@ async function syncNow(quiet = false) {
   } catch (e) {
     if (e.code === 401) { S.cloud.token = null; await kvSet('gtoken', null); }
     S.cloud.status = e.code === 401 ? 'signin' : 'error'; S.cloud.msg = e.message;
-  } finally { S.cloud.busy = false; await kvSet('meta', S.meta); if (S.view === 'app') render(); }
+  } finally { S.cloud.busy = false; await kvSet('meta', S.meta); if (S.view === 'app') softRender(); }
 }
 
 // ---------------- export ----------------
@@ -1131,7 +1171,7 @@ function csv() {
   S.meta = await kvGet('meta');
   S.cloud.token = await kvGet('gtoken');
   const red = C.readRedirect();
-  if (red && red.token) { S.cloud.token = { token: red.token, exp: red.exp }; await kvSet('gtoken', S.cloud.token); }
+  if (red && red.token) { S.cloud.token = { token: red.token, exp: red.exp }; try { S.cloud.token.email = await C.accountEmail(red.token); } catch { /* shown only when known */ } await kvSet('gtoken', S.cloud.token); }
   if (!S.meta || (red && red.next === 'restore')) {
     if (red && red.next === 'restore') { S.restore = { token: red.token ? S.cloud.token : null }; S.view = 'restore'; if (red.token) { try { await findForRestore(); } catch (e) { toast(e.message); } } }
     else S.view = 'welcome';
@@ -1143,8 +1183,12 @@ function csv() {
     if (document.visibilityState === 'hidden') S.hiddenAt = Date.now();
     else if (S.view === 'app') {
       if (S.hiddenAt && Date.now() - S.hiddenAt > AUTO_LOCK_MS) lockApp();
-      else { recompute(); render(); if (cloudReady()) syncNow(true); }
+      else { recompute(); softRender(); if (cloudReady()) syncNow(true); }
     }
   });
 })();
-window.__cycle = { S, predict, VERSION, render };
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault());
+document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+// I3: a redraw held back while she was typing is done once the field loses focus
+document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
+window.__cycle = { busyEditing, softRender, S, predict, VERSION, render };

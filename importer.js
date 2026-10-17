@@ -1,6 +1,6 @@
 // v3.1 (B7): find period dates in text taken from another app (PDF, CSV, text) or pasted in.
 // Everything runs on the device. The result is only a suggestion: the app shows it as a list to check before anything is stored.
-import { fromDays, diff, isDate } from './engine.js';
+import { fromDays, toDays, diff, isDate } from './engine.js';
 
 const MON = 'jan(?:uary|uar)?|feb(?:ruary|ruar)?|mar(?:ch)?|mär(?:z)?|maerz|mrz|apr(?:il)?|ma[iy]|jun[ei]?|jul[iy]?|aug(?:ust)?|sep(?:t(?:ember)?)?|o[ck]t(?:ober)?|nov(?:ember)?|de[cz](?:ember)?';
 const MONTH_NO = { jan: 1, feb: 2, mar: 3, 'mär': 3, mrz: 3, apr: 4, mai: 5, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, oct: 10, nov: 11, dez: 12, dec: 12 };
@@ -34,9 +34,39 @@ function numericOrder(text) {
   return { order: 'dmy', ambiguous: both > 0 };
 }
 
+// v3.2 (B9): the history table of a period-tracker report, e.g. "24/06 - 28/06  30 Days  5 Days" or "24/06,2025 - 28/06,2025 ...".
+// The year is printed only when it differs from the report's own year; the last number is the length of the period.
+const HIST_RE = /^\s*(\d{1,2})\/(\d{1,2})(?:\s*,\s*(\d{4}))?\s*[-–]\s*(?:(\d{1,2})\/(\d{1,2})(?:\s*,\s*(\d{4}))?|today|heute)\s+((?:pregnan\w*|schwanger\w*)|\d+\s*(?:days?|tage?n?)\b)(?:\s+(\d+)\s*(?:days?|tage?n?)\b)?(?:\s.*)?$/i;
+// Layout of the report: "START - END-OF-CYCLE  PERIOD LENGTH  CYCLE LENGTH". The second date is the end of the whole cycle, not of the bleeding,
+// so the end of the period is the start plus the period length. A cycle marked "Pregnant" has no period length.
+function findHistory(text, today, orderIn) {
+  const hits = [];
+  for (const line of String(text).split(/\r?\n/)) { const m = line.match(HIST_RE); if (m) hits.push(m); }
+  if (hits.length < 2) return null;
+  let dmy = 0, mdy = 0;
+  for (const m of hits) { const a = +m[1], b = +m[2]; if (a > 12 && b <= 12) dmy++; else if (b > 12 && a <= 12) mdy++; }
+  const order = orderIn || (mdy && !dmy ? 'mdy' : 'dmy');
+  const thisYear = +today.slice(0, 4);
+  const byStart = new Map(); let skipped = 0;
+  for (const m of hits) {
+    const a = +m[1], b = +m[2], d = order === 'mdy' ? b : a, mo = order === 'mdy' ? a : b, y = m[3] ? +m[3] : thisYear;
+    if (!valid(y, mo, d)) { skipped++; continue; }
+    const start = iso(y, mo, d);
+    if (diff(start, today) > 0) { skipped++; continue; }
+    const preg = /^(pregnan|schwanger)/i.test(m[7]); const len = preg ? 0 : parseInt(m[7], 10) || 0;
+    let end = len >= 1 && len <= 15 ? fromDays(toDays(start) + len - 1) : '';
+    if (end && diff(end, today) > 0) end = '';
+    if (!byStart.has(start)) byStart.set(start, preg ? { start, end: '', preg: true } : { start, end });
+  }
+  const rows = [...byStart.values()].sort((x, y) => (x.start < y.start ? -1 : 1)).slice(0, 200);
+  return { rows, order, ambiguous: false, skipped, mode: 'history' };
+}
+
 // returns { rows: [{start, end}], order, ambiguous, skipped } ; rows are sorted, without duplicates, none in the future
 export function findPeriods(text, opts = {}) {
   const today = opts.today || fromDays(Math.floor(Date.now() / 864e5));
+  const hist = findHistory(text, today, opts.order);
+  if (hist) return hist;
   const found = numericOrder(text);
   const order = opts.order || found.order;
   const ambiguous = found.ambiguous;

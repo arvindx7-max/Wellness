@@ -19,10 +19,10 @@ export async function openVault(text, key) { return open(vaultHeader(text), key,
 // ---------- sign-in: redirect for the Home Screen app, window elsewhere ----------
 export const isStandalone = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
 export const redirectUri = () => location.origin + location.pathname;
-export function signInRedirect(clientId, next) {
+export function signInRedirect(clientId, next, prompt = '') {
   const state = crypto.getRandomValues(new Uint32Array(4)).join('');
   try { localStorage.setItem(LS('oauth_state'), state); localStorage.setItem(LS('oauth_next'), next); } catch { /* storage blocked */ }
-  const p = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri(), response_type: 'token', scope: SCOPE, include_granted_scopes: 'true', state });
+  const p = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri(), response_type: 'token', scope: SCOPE, include_granted_scopes: 'true', state, ...(prompt ? { prompt } : {}) });
   location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${p}`);
 }
 export function readRedirect() {
@@ -43,7 +43,7 @@ function loadScript(src) {
     document.head.appendChild(s);
   });
 }
-export async function signInWindow(clientId) {
+export async function signInWindow(clientId, prompt = '') {
   await loadScript('https://accounts.google.com/gsi/client');
   return new Promise((res, rej) => {
     const tc = window.google.accounts.oauth2.initTokenClient({
@@ -52,7 +52,7 @@ export async function signInWindow(clientId) {
         : rej(new Error(r && r.error_description ? r.error_description : 'Google sign-in failed.'))),
       error_callback: (e) => rej(new Error(e && e.type === 'popup_closed' ? 'Google sign-in was cancelled.' : 'Google sign-in window could not open.')),
     });
-    tc.requestAccessToken({ prompt: '' });
+    tc.requestAccessToken({ prompt });
   });
 }
 
@@ -70,6 +70,9 @@ export async function findVault(token) {
   const q = encodeURIComponent(`name='${VAULT_NAME}' and trashed=false`);
   return (await (await api(token, `${DRIVE}?q=${q}&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime)`)).json()).files || [];
 }
+// v3.2 (B10): which Google account is signed in (shown to the user) and renaming the old vault file when a new one is started
+export async function accountEmail(token) { return (await (await api(token, 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)')).json()).user.emailAddress || ''; }
+export async function renameFile(token, id, name) { return (await api(token, `${DRIVE}/${id}?fields=id,name`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })).json(); }
 export async function fileMeta(token, id) { return (await api(token, `${DRIVE}/${id}?fields=id,modifiedTime`)).json(); }
 export async function download(token, id) { return (await api(token, `${DRIVE}/${id}?alt=media`)).text(); }
 export async function createVault(token, text) {

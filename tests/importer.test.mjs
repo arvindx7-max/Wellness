@@ -37,4 +37,19 @@ ok('mixed day-first and month-first dates are each read the only way they can be
 ok('the chosen order does not break a date that has only one reading', starts(f('25.06.2026\n05/06/2026', { order: 'mdy' })) === '2026-05-06,2026-06-25');
 ok('pregnancy and miscarriage lines are ignored (English and German)', starts(f('Pregnancy test 2026-07-08\nSchwangerschaft 2026-07-09\nMiscarriage 2026-07-10\nFehlgeburt 2026-07-11\n2026-06-24')) === '2026-06-24');
 ok('at most 200 rows', f(Array.from({ length: 300 }, (_, i) => `20${String(i % 25).padStart(2, '0')}-01-${String(1 + (i % 28)).padStart(2, '0')}\n2001-${String(1 + (i % 12)).padStart(2, '0')}-${String(1 + (i % 27)).padStart(2, '0')}`).join('\n')).rows.length <= 200);
+// ---- v3.2 (B9): history table of a tracker report (invented rows in the same layout: START - END OF CYCLE, PERIOD LENGTH, CYCLE LENGTH)
+const REPORT = ['Name: Alice Placeholder Age:Cycle Summary 07/01,2025 - 03/10 (6 cycles)', 'LAST PERIOD 23/09', 'AVG CYCLE LENGTH 30 days', 'Cycle History 07/01,2025 - 03/10',
+  'START - END DATE PERIOD CYCLE(DAY)',
+  '23/09 - Today 5 Days', '24/08 - 22/09 5 Days 30 Days', '25/07 - 23/08 4 Days 30 Days', '25/05 - 24/07 Pregnant 61 Days',
+  '12/05,2025 - 24/05 6 Days 29 Days', '13/04,2025 - 11/05,2025 4 Days 30 Days',
+  'Period Tracker Page 1/9', 'Cycle Details', '23/09 - Today (30 Days)', '23/09 30/09 07/10 14/10', '1 2 3 4 5 6 7 8 9 10',
+  '24/08 - 22/09 (30 Days) Next 31-32 Days >>', '24/08 31/08 07/09 14/09'].join('\n');
+const rep = f(REPORT);
+ok('report: only the table rows become periods, in order', starts(rep) === '2025-04-13,2025-05-12,2026-05-25,2026-07-25,2026-08-24,2026-09-23', starts(rep));
+ok('report: a row without a year takes the report year, with a year keeps it', rep.rows[0].start === '2025-04-13' && rep.rows[2].start === '2026-05-25');
+ok('report: the end is the start plus the period length minus one (not the end of the cycle)', pairs(rep).includes('2026-08-24>2026-08-28') && pairs(rep).includes('2025-04-13>2025-04-16') && pairs(rep).includes('2025-05-12>2025-05-17'), pairs(rep));
+ok('report: a "Pregnant" row is kept without an end and flagged', rep.rows[2].end === '' && rep.rows[2].preg === true);
+ok('report: an open row ("Today") ends no later than today', rep.rows[5].start === '2026-09-23' && rep.rows[5].end === '2026-09-27', JSON.stringify(rep.rows[5]));
+ok('report: summary lines, chart labels and detail headers add nothing', rep.rows.length === 6 && rep.mode === 'history');
+ok('report: needs at least two table rows, otherwise the normal finder runs', f('24/06 - 28/06 5 Days 30 Days').mode !== 'history');
 console.log(`importer: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);
