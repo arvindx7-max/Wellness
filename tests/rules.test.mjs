@@ -27,8 +27,8 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
   d.settings.helpline = { name: 'Test Support Line', number: '+00 000 000' }; const g = run(d, '2026-10-01');
   eq('R9 with a saved support line → call button for that number only', [g[0].phone, g[0].label], ['+00000000', 'Call Test Support Line']); }
 { const d = base(); for (const x of ['2026-09-10', '2026-09-28', '2026-10-01']) d.checkins[x] = { symptoms: { low: 3 } }; eq('R9 only 2 in the last 14 days → no flag', ids(run(d, '2026-10-01')), []); }
-{ const d = { periods: [{ id: 'a', start: '2026-01-01' }, { id: 'b', start: '2026-01-29' }, { id: 'c', start: '2026-03-12' }, { id: 'e', start: '2026-04-25' }], days: {}, checkins: {}, settings: {} };
-  eq('R8 two cycles outside 24–38 → doctor', ids(run(d, '2026-04-27')), ['doctor-range']); }
+{ const d = { periods: [{ id: 'a', start: '2026-01-01' }, { id: 'b', start: '2026-01-29' }, { id: 'c', start: '2026-03-12' }, { id: 'e', start: '2026-04-22' }], days: {}, checkins: {}, settings: {} };
+  eq('R8 two cycles outside 24–38 → doctor', ids(run(d, '2026-04-23')), ['doctor-range']); }
 { const d = base(); d.checkins['2026-09-30'] = { change: 'h1x2', clots: true }; eq('urgent sorted first', ids(run(d, '2026-10-01')), ['soak', 'clots']); }
 // recommendations
 { const r = recsFor({ symptoms: { cramps: 2 } }, 'menstruation'); eq('cramps → ACOG suggestion with escalation', [r.length, r[0].src, !!r[0].escalate], [1, 'acogPain', true]); }
@@ -48,4 +48,18 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
 }
 // P5: no country-specific wording left in the rules
 { const fs = await import('fs'); const src = fs.readFileSync(new URL('../rules.js', import.meta.url), 'utf8'); eq('no euro coin or fixed helpline in rules.js', /euro|0800/.test(src), false); }
+
+// v4 (R8): late period check result
+{
+  const ok = (n, c) => eq(n, !!c, true);
+  const { lateResult } = await import('../rules.js');
+  const a = lateResult({ preg: 'no', changes: [], signs: [] });
+  ok('R8: urgent warnings shown even when pregnancy is ruled out', a.urgent.length === 2);
+  ok('R8: no pregnancy test step when ruled out', !a.steps.some((x) => /pregnancy test/.test(x)));
+  const b = lateResult({ preg: 'unsure', changes: ['stress', 'contra'], signs: ['hair'] }, 46);
+  ok('R8: not sure keeps pregnancy as a reason and a test as the first step', b.reasons[0].code === 'preg' && /pregnancy test/.test(b.steps[0]));
+  ok('R8: chosen changes become reasons in order', b.reasons.map((r) => r.code).join() === 'preg,stress,contra,signs');
+  ok('R8: other signs suggest a doctor', b.seeDoctorNow && b.steps.some((x) => /doctor/.test(x)));
+  ok('R8: perimenopause comes first from 40', /Perimenopause/.test(b.other[0]) && !/Perimenopause/.test(lateResult({}, 30).other[0]));
+}
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

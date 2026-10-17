@@ -4,12 +4,12 @@ import * as K from './crypto.js';
 import * as Lock from './lock.js';
 import * as C from './cloud.js';
 import * as T from './content.js';
-import { evaluate, recsFor, heavyDays } from './rules.js';
+import { evaluate, recsFor, heavyDays, lateResult } from './rules.js';
 import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
 import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v3.2';
+export const VERSION = 'v4';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -27,9 +27,20 @@ const S = {
   sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0, imp: null,
   cloud: { token: null, status: 'off', msg: '', busy: false },
 };
-const fresh = () => ({ app: 'cycle', v: 1, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
+const fresh = () => ({ app: 'cycle', v: 1, schema: C.SCHEMA, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
 // v1 data has no check-ins or acknowledgements yet
-const upgrade = (d) => ({ ...d, days: d.days || {}, checkins: d.checkins || {}, acks: d.acks || {} });
+const upgrade = (d) => ({ ...d, schema: Math.max(C.SCHEMA, d.schema || 0), days: d.days || {}, checkins: d.checkins || {}, acks: d.acks || {} });
+// v4: one field of a day (flow, ovu = ovulation tests, sex) changes on its own, with its own time, so sync can merge per field
+function setDay(date, field, value) {
+  const now = Date.now(); S.data.days[date] = { ...(S.data.days[date] || {}), [field]: value, [field + 'At']: now, updatedAt: now };
+}
+// v4 (R5): date format and first day of the week; neutral defaults from the device's language
+const usLocale = () => /^en-US/i.test((navigator.languages && navigator.languages[0]) || navigator.language || '');
+function display() { const d = (S.data && S.data.settings && S.data.settings.display) || {}; return { dateFmt: d.dateFmt || (usLocale() ? 'mdy' : 'dmy'), weekStart: d.weekStart || (usLocale() ? 'sun' : 'mon') }; }
+// v4 (R6): what she chose to hide; hiding never deletes anything
+function hidden(k) { const x = (S.data && S.data.settings && S.data.settings.hide) || {}; return !!x[k]; }
+// v4 (R10): age from the birth year, always current; only used for age-dependent notes
+function age() { const y = S.data && S.data.settings && +S.data.settings.birthYear; return y ? +today().slice(0, 4) - y : null; }
 const today = () => localToday();
 const uid = () => `p${Date.now().toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -39,7 +50,9 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 function fmt(d, withYear = false) {
   if (!d) return '';
-  const [y, m, dd] = d.split('-').map(Number);
+  const [y, m, dd] = d.split('-').map(Number); const f = display().dateFmt;
+  if (f === 'num') return `${String(dd).padStart(2, '0')}/${String(m).padStart(2, '0')}${withYear ? `/${y}` : ''}`;
+  if (f === 'mdy') return `${MONTHS[m - 1].slice(0, 3)} ${dd}${withYear ? `, ${y}` : ''}`;
   return `${dd} ${MONTHS[m - 1].slice(0, 3)}${withYear ? ` ${y}` : ''}`;
 }
 const weekday = (d) => WD[(new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay() + 6) % 7];
@@ -74,7 +87,7 @@ function look() {
   return { ...TH.LOOK_DEFAULT, ...l, cards: { ...TH.LOOK_DEFAULT.cards, ...(l.cards || {}) } };
 }
 async function setLook(patch) {
-  S.data.settings = { ...S.data.settings, look: { ...look(), ...patch }, updatedAt: Date.now() };
+  const now = Date.now(); S.data.settings = { ...S.data.settings, look: { ...look(), ...patch, updatedAt: now }, updatedAt: now };
   await persist(); render();
 }
 const sysDark = () => !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -103,6 +116,7 @@ function softRender() {
 // ---------------- render ----------------
 function render() {
   S.redrawLater = false;
+  document.body.classList.toggle('sheet-open', !!S.sheet);
   applyLook();
   const app = $('#app');
   if (S.view === 'welcome') app.innerHTML = welcomeView();
@@ -118,7 +132,12 @@ function render() {
     app.innerHTML = `<main class="screen tab-${S.tab}">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
-  if (S.sheet && S.view === 'app') { sh.innerHTML = `<div class="sheet-scrim" data-act="close-sheet"></div><div class="sheet-card" role="dialog" aria-modal="true"><div class="grabber" aria-hidden="true"></div>${sheetBody()}</div>`; sh.hidden = false; }
+  if (S.sheet && S.view === 'app') {
+    // v4: a sheet that is already open is redrawn in place, without playing the slide-in again (no flicker on each tap)
+    const still = !sh.hidden && sh.dataset.name === S.sheet.name; const top = still ? (sh.querySelector('.sheet-card') || {}).scrollTop || 0 : 0;
+    sh.innerHTML = `<div class="sheet-scrim ${still ? 'still' : ''}" data-act="close-sheet"></div><div class="sheet-card ${still ? 'still' : ''}" role="dialog" aria-modal="true"><div class="grabber" aria-hidden="true"></div>${sheetBody()}</div>`;
+    sh.hidden = false; sh.dataset.name = S.sheet.name; if (top) sh.querySelector('.sheet-card').scrollTop = top;
+  }
   else { sh.hidden = true; sh.innerHTML = ''; }
 }
 
@@ -156,9 +175,9 @@ function onboardView() {
         <span class="fine">From the first day of one period to the first day of the next.</span></label>
       <label>Usual period length, in days
         <input type="number" name="usualPeriod" min="1" max="15" inputmode="numeric" placeholder="I don't know" value="${h(d.usualPeriod || '')}"></label>
-      <fieldset><legend>Your age</legend>
-        ${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<label class="choice"><input type="radio" name="ageBand" value="${v}" ${d.ageBand === v ? 'checked' : ''} required ${''}> ${t}</label>`).join('')}
-        <span class="fine">Used later to judge whether cycles are regular (FIGO 2018).</span></fieldset>
+      <label>Year of birth (optional)
+        <input type="number" name="birthYear" min="1940" max="${+today().slice(0, 4) - 10}" inputmode="numeric" placeholder="For example 1990" value="${h(d.birthYear || '')}">
+        <span class="fine">Only the year, stored encrypted. Used for notes that depend on age, not for the predictions.</span></label>
       <fieldset><legend>Your diet</legend>
         ${T.DIETS.map(([v, t]) => `<label class="choice"><input type="radio" name="diet" value="${v}" ${d.diet === v ? 'checked' : ''} required> ${t}</label>`).join('')}
         <span class="fine">Only changes which foods the Food tab lists. You can change it in Settings.</span></fieldset>
@@ -193,7 +212,7 @@ function faceIdOfferView() {
 function restoreView() {
   const st = S.restore || {};
   let body;
-  const who = st.token && st.token.email ? `<p class="fine">Signed in as <strong>${h(st.token.email)}</strong>. <button class="link" data-act="restore-switch">Use a different Google account</button></p>` : '';
+  const who = st.token && st.token.token ? `<p class="fine">${st.token.email ? `Signed in as <strong>${h(st.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="restore-switch">Use a different Google account</button></p>` : '';
   if (!st.token) body = `<ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account where Cycle keeps its encrypted vault. It is the account used when sync was turned on.</li><li>Enter the vault passphrase.</li></ol><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
   else if (!st.fileId) body = `<div class="notice"><p><strong>No Cycle vault was found in this Google account.</strong></p>
       <p class="fine">A vault exists only after Cycle sync has been turned on once, on a device that already has your data. Until then there is nothing to restore.</p></div>
@@ -206,8 +225,10 @@ function restoreView() {
     <button class="btn wide" data-act="import-start">Start from a backup file</button>
     <p class="fine">Wrong Google account? Tap <strong>Use a different Google account</strong> above and choose the other one.</p>
     <button class="btn small" data-act="restore-retry">Search again</button>`;
+  // B16 root cause (from v3.2): this "else" used to belong to the line above, so with no sign-in at all the
+  // screen said "Vault found". Now "Vault found" needs both a sign-in and a found file.
   if (st.token && !st.fileId) body = who + body;
-  else body = `${who}<p class="lede">Vault found in this account. Enter its passphrase to bring your data to this device.</p>
+  else if (st.token && st.fileId) body = `${who}<p class="lede">Vault found in this account. Enter its passphrase to bring your data to this device.</p>
     <form class="stack" data-form="restore">${USER}${pw('p', 'Vault passphrase', 'current-password', true, 0)}<button class="btn primary wide">Unlock and restore</button></form>
     ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}
     <p class="fine">Not your vault, or the passphrase is lost? Tap <strong>Use a different Google account</strong> above. If the passphrase is lost for good, the vault cannot be opened; set Cycle up again from a backup file, then start a new vault in Settings.</p>`;
@@ -334,6 +355,7 @@ function todayView() {
       <button class="btn wide" data-act="add-past">Add a past period</button></section>`;
   }
   const st = p.state;
+  if (p.paused) return pregnancyView(p, t);
   const wording = !!S.data.settings.wording;
   let sub;
   if (st.id === 'late' && st.stale) sub = `No period logged since ${fmt(st.lastStart)}`;
@@ -349,17 +371,19 @@ function todayView() {
     ? '<button class="btn" data-act="period-end-earlier">Ended on another day</button>'
     : st.id === 'menstruation' ? '' : `<button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
   const flow = (S.data.days[t] || {}).flow || 'none';
-  const est = `<p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>`;
+  // U4: one short line; the explanation lives in the Guide (ⓘ)
+  const est = `<p class="estimate">${st.id === 'late' ? 'Forecasts paused until you log your period' : `Confidence: ${h(p.confidence)}`} ${info('estimate')}</p>`;
   // One list of blocks; on a phone they stack in this order, on a laptop they split into two columns.
   const L = look();
   return `${heroView(p, heroBtn, t)}
   ${flagCards()}
+  ${st.id === 'late' ? `<button class="card late-card" data-act="late-check"><span><strong>Period ${st.stale ? 'not logged for a long time' : `${plural(st.daysLate, 'day')} late`}</strong><span class="fine">Check what could be behind it</span></span><span aria-hidden="true">›</span></button>` : ''}
   ${L.companion !== 'off' && !L.noteSeen ? `<section class="note companion-note"><p>${h(TH.COMPANION_CAPTION)}</p><button class="btn small" data-act="note-seen">Got it</button></section>` : ''}
   <div class="today-grid">
     <div class="col">
       <section class="ring-block o1">${cycleRing(p)}
         <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div></section>
-      <div class="o2">${fertileLine}${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
+      <div class="o2">${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
       <div class="o4">${L.cards.week ? weekStrip(p) : ''}</div>
       <div class="actions o5">${actions}</div>
       <section class="card o6"><h2>Bleeding today</h2>
@@ -367,12 +391,19 @@ function todayView() {
     </div>
     <div class="col">
       <div class="o2">${sharpenCard(p)}</div>
-      <div class="o3">${L.cards.checkin ? checkinCard(t) : ''}</div>
+      <div class="o3 bento">${L.cards.checkin ? checkinCard(t) : ''}${L.cards.food ? foodTeaser() : ''}</div>
       <div class="o8">${L.cards.phase ? phaseCard(st.id) : ''}</div>
-      <div class="o9">${L.cards.food ? foodTeaser() : ''}</div>
+
       <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
     </div>
   </div>`;
+}
+// v4 (D10): the current cycle is marked as pregnancy: no predictions, no late alerts
+function pregnancyView(p, t) {
+  return `<section class="hero" aria-label="Today at a glance"><div class="top"><h1>Today · ${weekday(t)}, ${fmt(t, true)}</h1>${syncPill()}</div>
+    <div class="state">Pregnancy</div><div class="lead">Predictions paused since</div><div class="big">${fmt(p.lastStart)}</div>
+    <div class="sub">No period forecasts or late alerts while this cycle is marked as pregnancy.</div>
+    <button class="hero-btn" data-act="edit-period" data-id="${p.lastPeriod.id}">End pregnancy mode</button></section>`;
 }
 // U2: one big readout in the header, with the cycle-aware companion
 function heroView(p, btn, t) {
@@ -394,7 +425,7 @@ function heroView(p, btn, t) {
   return `<section class="hero ${art ? 'has-comp' : ''}" aria-label="Today at a glance">
     <div class="top"><h1>Today · ${weekday(t)}, ${fmt(t, true)}</h1>${syncPill()}</div>
     <div class="state">Day ${st.cycleDay} · ${h(st.label)}</div>
-    <div class="lead">${lead}</div><div class="big">${big}</div>
+    <div class="lead">${lead}</div><div class="big">${String(big).replace(/^(\d+) (\w+)$/, '<span class="n">$1</span> <span class="u">$2</span>')}</div>
     <div class="sub">${h(line)}</div>
     ${btn}
     ${art ? `<div class="companion" data-stage="${L.companion}-${phase}" aria-hidden="true">${art}</div>` : ''}
@@ -404,15 +435,15 @@ function heroView(p, btn, t) {
 function sharpenCard(p) {
   if (p.usedCycles >= CONST.MEDIUM_FROM) return '';
   const need = CONST.MEDIUM_FROM - p.usedCycles;
-  return `<section class="card sharpen"><h2>Sharpen your predictions</h2>
-    <p class="fine">Cycle has ${p.usedCycles ? `${plural(p.usedCycles, 'complete cycle')} of yours` : 'no complete cycle of yours yet'}, so it relies on ${p.usedDefault ? 'a typical 29-day cycle' : 'the cycle length you entered'} with a ±${p.spread}-day margin. That is why the ranges are wide. Add ${need === 1 ? 'one more past period' : `${need} more past periods`} with their first and last days, and the estimates narrow to your own rhythm.</p>
-    <button class="btn" data-act="add-past">Add a past period</button></section>`;
+  return `<section class="card sharpen"><h2>Sharpen your predictions</h2><button class="btn small" data-act="add-past">Add a past period</button>
+    <details><summary>Why</summary><p class="fine">Cycle has ${p.usedCycles ? `${plural(p.usedCycles, 'complete cycle')} of yours` : 'no complete cycle of yours yet'}, so it relies on ${p.usedDefault ? 'a typical 29-day cycle' : 'the cycle length you entered'} with a ±${p.spread}-day margin. That is why the ranges are wide. Add ${need === 1 ? 'one more past period' : `${need} more past periods`} with their first and last days, and the estimates narrow to your own rhythm.</p>
+</details></section>`;
 }
 // B2 item 6: what is happening now
 function phaseCard(id) {
   const info = T.PHASE_INFO[id]; if (!info) return '';
-  return `<section class="card phase"><h2>${h(info.title)}</h2><p>${h(info.text)}</p>
-    <p class="fine">Sources: ${info.src.map(([n, u]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${h(n)}</a>`).join('; ')}</p></section>`;
+  return `<section class="card phase"><h2>${h(info.title)}</h2><details><summary>More</summary><p>${h(info.text)}</p>
+    <p class="fine">Sources: ${info.src.map(([n, u]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${h(n)}</a>`).join('; ')}</p></details></section>`;
 }
 const WARNING = 'Calendar-based estimate. With typical use, fertility-awareness methods lead to 12–24 pregnancies per 100 women in the first year. This is not a reliable method of birth control: use contraception on any day if you want to avoid pregnancy.';
 const FLOWS = [['none', 'None'], ['spotting', 'Spotting'], ['light', 'Light'], ['medium', 'Medium'], ['heavy', 'Heavy']];
@@ -433,10 +464,13 @@ function flagCards() {
     ${f.src ? `<p class="fine">Source: <a href="${T.SRC[f.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[f.src].name)}</a></p>` : ''}
     <button class="btn small" data-act="ack" data-id="${h(f.id)}">I have read this</button></section>`).join('');
 }
+// G4-10: with symptoms and moods both hidden, the check-in is just a note (bleeding safety questions stay)
+const noteOnly = () => hidden('symptoms') && hidden('moods');
 function checkinCard(date) {
   const ci = S.data.checkins[date];
   const recs = ci ? recsFor(ci, phaseOn(date)) : [];
-  if (!ci) return `<section class="card checkin"><h2>How are you today?</h2><p class="fine">A few quick questions for this part of your cycle. Takes under 30 seconds.</p><button class="btn primary" data-act="checkin" data-date="${date}">Start check-in</button></section>`;
+  if (!ci && noteOnly()) return `<section class="card checkin"><h2>Today's note</h2><button class="btn primary" data-act="checkin" data-date="${date}">Add note</button></section>`;
+  if (!ci) return `<button class="card checkin focus" data-act="checkin" data-date="${date}"><span class="ft">How are you today?</span><span class="arrow" aria-hidden="true">→</span></button>`;
   const logged = Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`);
   return `<section class="card checkin"><h2>Today's check-in</h2><p class="fine">${logged.length ? h(logged.join(', ')) : 'No symptoms logged.'}</p>
     ${recs.map(recBlock).join('')}
@@ -448,7 +482,7 @@ function recBlock(r) {
 }
 function foodTeaser() {
   const ph = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular'; const f = T.FOOD[ph];
-  return `<section class="card food-teaser"><h2>Food for now: ${h(f.title.toLowerCase())}</h2><p class="fine">${h(f.why)}</p><button class="btn small" data-tab="food">See foods</button></section>`;
+  return `<button class="card food-teaser" data-tab="food"><span class="badge-soft">Food for now</span><span class="ft">${h(f.title)}</span></button>`;
 }
 const phaseKey = (id) => (['menstruation', 'luteal', 'late', 'fertile', 'follicular'].includes(id) ? id : 'follicular');
 
@@ -479,7 +513,7 @@ function foodCard(k, label, selected, now, diet) {
 
 // B2 item 7: mid-cycle, preview what comes next
 function comingUp() {
-  const p = S.pred; if (!p || p.empty) return '';
+  const p = S.pred; if (!p || p.empty || p.paused) return '';
   const lutealStart = addDays(p.possible[1], 1); const n = diff(lutealStart, today());
   const when = n > 0 ? `in about ${plural(n, 'day')}` : 'soon';
   return `<div class="next"><h3>Coming up ${when}: before your period</h3><p class="fine">${h(T.FOOD.luteal.title)}. ${h(T.FOOD.luteal.why)}</p>
@@ -501,9 +535,9 @@ function checkinSheet(date) {
   return `<h2>${h(q.title)}: ${date === today() ? 'today' : fmt(date)}</h2>
   <form class="stack checkin-form" data-form="checkin" data-date="${date}">
     ${q.ask.map((k) => asks[k]).join('')}
-    ${q.symptoms.map(scale).join('')}
-    <fieldset class="q"><legend>Mood</legend>${T.MOOD_GOOD.map((m) => `<label class="pick"><input type="checkbox" name="g_${m.code}" ${sy[m.code] ? 'checked' : ''}><span>${m.label}</span></label>`).join('')}</fieldset>
-    <details ${extraOpen ? 'open' : ''}><summary>Log another symptom</summary>${others.map((s) => scale(s.code)).join('')}</details>
+    ${hidden('symptoms') ? '' : q.symptoms.map(scale).join('')}
+    ${hidden('moods') ? '' : `<fieldset class="q"><legend>Mood</legend>${T.MOOD_GOOD.map((m) => `<label class="pick"><input type="checkbox" name="g_${m.code}" ${sy[m.code] ? 'checked' : ''}><span>${m.label}</span></label>`).join('')}</fieldset>`}
+    ${hidden('symptoms') ? '' : `<details ${extraOpen ? 'open' : ''}><summary>Log another symptom</summary>${others.map((s) => scale(s.code)).join('')}</details>`}
     <label>Pain relief or medicine taken<input type="text" name="meds" maxlength="80" value="${h(ci.meds || '')}" placeholder="Optional"></label>
     <label>Notes<textarea name="note" rows="2" maxlength="500" placeholder="Optional">${h(ci.note || '')}</textarea></label>
     <p class="fine">Severity: mild = noticeable, moderate = disrupts the day, severe = stops normal activities.</p>
@@ -555,20 +589,25 @@ function weekStrip(p) {
 function dayClass(i) {
   const c = [];
   if (i.logged) c.push('m-period'); else if (i.predictedPeriod) c.push('m-pred');
-  if (!i.logged && i.fertile) c.push(i.fertile === 'peak' ? 'm-peak' : 'm-possible');
+  if (!i.logged && i.fertile && !hidden('predictions')) c.push(i.fertile === 'peak' ? 'm-peak' : 'm-possible');
   if (i.horizon > 1) c.push('far');
   return c.join(' ');
 }
 function daySymbol(i) {
-  if (i.ovulation && !i.logged) return '<span class="s-ovu" title="Likely ovulation">●</span>';
+  let out = '';
+  if (i.test === 'pos' && !hidden('tests')) out += '<span class="s-test" title="Positive ovulation test">▲</span>';
+  if (i.sex && !hidden('sex')) out += '<span class="s-sex" title="Sex logged">○</span>';
+  if (out) return out;
+  if (i.ovulation && !i.logged && !hidden('predictions')) return '<span class="s-ovu" title="Likely ovulation">●</span>';
   if (i.flow && i.flow !== 'none' && !i.logged) return '<span class="s-flow" title="Bleeding logged">◆</span>';
   return '';
 }
 function describe(i) {
   const parts = [];
   if (i.logged) parts.push('period'); else if (i.predictedPeriod) parts.push('predicted period');
-  if (i.fertile === 'peak') parts.push('peak fertile day'); else if (i.fertile) parts.push('possible fertile day');
-  if (i.ovulation) parts.push('likely ovulation');
+  if (!hidden('predictions')) { if (i.fertile === 'peak') parts.push('peak fertile day'); else if (i.fertile) parts.push('possible fertile day'); if (i.ovulation) parts.push('likely ovulation'); }
+  if (i.test && !hidden('tests')) parts.push(i.test === 'pos' ? 'positive ovulation test' : 'ovulation test logged');
+  if (i.sex && !hidden('sex')) parts.push('sex logged');
   if (i.flow && i.flow !== 'none') parts.push(`${i.flow} bleeding logged`);
   return parts.join(', ') || 'no marks';
 }
@@ -577,7 +616,7 @@ function describe(i) {
 function calendarView() {
   const t = today(); const ym = S.month || t.slice(0, 7);
   const [y, m] = ym.split('-').map(Number);
-  const first = `${ym}-01`; const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
+  const first = `${ym}-01`; const sun = display().weekStart === 'sun'; const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + (sun ? 0 : 6)) % 7;
   const daysIn = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const cells = [];
   for (let i = 0; i < lead; i++) cells.push('<span class="cal-pad"></span>');
@@ -588,78 +627,120 @@ function calendarView() {
   const wording = !!S.data.settings.wording;
   return `${topbar('Calendar')}
   <div class="month-nav"><button class="icon-btn" data-act="month" data-step="-1" aria-label="Previous month">‹</button><h2>${MONTHS[m - 1]} ${y}</h2><button class="icon-btn" data-act="month" data-step="1" aria-label="Next month">›</button></div>
-  <div class="cal-grid">${WD.map((w) => `<span class="cal-wd">${w.slice(0, 2)}</span>`).join('')}${cells.join('')}</div>
+  <div class="cal-grid">${(sun ? ['Sun', ...WD.slice(0, 6)] : WD).map((w) => `<span class="cal-wd">${w.slice(0, 2)}</span>`).join('')}${cells.join('')}</div>
   ${ym !== t.slice(0, 7) ? '<button class="link center" data-act="month-today">Back to this month</button>' : ''}
   <section class="legend">
     <span><i class="lg m-period"></i>Period</span><span><i class="lg m-pred"></i>Predicted period</span>
     <span><i class="lg m-peak"></i>${wording ? 'High chance of pregnancy' : 'Peak fertile days'}</span><span><i class="lg m-possible"></i>${wording ? 'Higher chance of pregnancy' : 'Possible fertile days'}</span>
     <span><b class="s-ovu">●</b>Likely ovulation</span><span><b class="s-flow">◆</b>Bleeding logged</span>
+    ${hidden('tests') ? '' : '<span><b class="s-test">▲</b>Positive test</span>'}${hidden('sex') ? '' : '<span><b class="s-sex">○</b>Sex logged</span>'}
   </section>
   <p class="fine">${wording ? WARNING : 'All future days are estimates. Paler marks are further ahead and less certain.'}</p>`;
 }
 
 // ---------------- History (FR-05) ----------------
 function historyView() {
-  const ps = livePeriods(S.data.periods).slice().reverse();
+  const all = livePeriods(S.data.periods); const p = S.pred;
   const cyc = cycles(S.data.periods); const cycBy = Object.fromEntries(cyc.map((c) => [c.start, c]));
-  const suspects = new Set((S.pred && !S.pred.empty ? S.pred.notes : []).filter((n) => n.kind === 'missed').map((n) => n.cycleStart));
-  const p = S.pred;
-  const stats = p && !p.empty ? `<section class="card stats">
-      <div><span class="big">${p.cycleLen}</span><span class="cap">days, average cycle</span></div>
-      <div><span class="big">±${p.spread}</span><span class="cap">days, spread</span></div>
-      <div><span class="big">${p.periodLen}</span><span class="cap">days, period</span></div>
-      <p class="fine">${confidenceText(p)} The average uses your last ${CONST.WINDOW} cycles at most; cycles you mark as excluded are left out.</p></section>` : '';
-  const rows = ps.map((x) => {
-    const c = cycBy[x.start]; const len = periodLength(x);
-    return `<li class="hist ${x.excluded ? 'excl' : ''}"><div><strong>${fmt(x.start, true)}${x.end ? ` to ${fmt(x.end)}` : ''}</strong>
-      <span class="fine">${len ? `${plural(len, 'day')} of bleeding` : 'End not logged'}${c ? `; cycle ${c.length} days${!c.valid ? ' (not used: check this)' : suspects.has(c.start) ? ' (possible missed period, not used)' : ''}` : '; current cycle'}${x.excluded ? `; excluded${x.excludeReason ? ` (${h(x.excludeReason)})` : ''}` : ''}</span></div>
-      <button class="btn small" data-act="edit-period" data-id="${x.id}">Edit</button></li>`;
+  const suspects = new Set((p && !p.empty ? p.notes : []).filter((n) => n.kind === 'missed').map((n) => n.cycleStart));
+  const years = [...new Set(all.map((x) => x.start.slice(0, 4)))].sort().reverse();
+  const f = S.histFilter || 'last6';
+  const filters = [['last3', 'Last 3'], ['last6', 'Last 6'], ['year', 'Last year'], ...years.map((y) => [y, y]), ['all', 'All']];
+  let list = all.slice().reverse();
+  if (f === 'last3') list = list.slice(0, 3); else if (f === 'last6') list = list.slice(0, 6);
+  else if (f === 'year') list = list.filter((x) => diff(today(), x.start) <= 365); else if (/^\d{4}$/.test(f)) list = list.filter((x) => x.start.startsWith(f));
+  const stats = p && !p.empty ? `<section class="stats-hero"><div><span class="cap">Average cycle</span><span class="big">${p.cycleLen}<small> days</small></span></div>
+      <div class="r"><span class="cap">Period</span><span class="mid">${plural(p.periodLen, 'day')}</span><span class="cap">Range ±${plural(p.spread, 'day')}</span></div></section>` : '';
+  const expected = p && !p.empty ? p.cycleLen + p.spread : 38;
+  const rows = list.map((x) => {
+    const c = cycBy[x.start]; const plen = periodLength(x) || (p && !p.empty ? p.periodLen : CONST.DEFAULT_PERIOD);
+    const preg = x.excluded && x.excludeReason === 'Pregnancy';
+    const len = c ? c.length : diff(today(), x.start) + 1;
+    const seg = (n, cls, ov) => `<i class="${cls}" style="flex:${Math.max(n, 0)} 1 0">${ov ? '<b></b>' : ''}</i>`;
+    let bar;
+    if (preg) bar = seg(len, 'g');
+    else if (c) {
+      const ov = c.length - CONST.D_LIKELY; const late = Math.max(0, c.length - expected);
+      const gap = Math.max(0, ov - 6 - plen), fert = Math.max(0, ov - 1 - plen - gap); // G5-5: the parts always add up to the cycle length
+      bar = seg(plen, 'p') + seg(gap, 'x') + seg(fert, 'f') + seg(1, 'o', true) + seg(1, 'f') + seg(Math.max(0, c.length - ov - 1 - late), 'x') + (late ? seg(late, 'l') : '');
+    } else bar = seg(Math.min(plen, len), 'p') + seg(Math.max(len - plen, 0), 'x') + seg(Math.max((p && !p.empty ? p.cycleLen : 30) - len, 0), 'e');
+    const title = preg ? 'Pregnancy' : c ? plural(c.length, 'day') : `Day ${len} now`;
+    const note = preg ? ' · left out of averages' : x.excluded ? ' · left out' : c && !c.valid ? ' · check this' : c && suspects.has(c.start) ? ' · possible missed period' : '';
+    return `<li><button class="hist-row" data-act="edit-period" data-id="${x.id}"><span class="hist-top"><span class="t">${title}</span><span class="fine">${fmt(x.start, true)}${c ? ` – ${fmt(addDays(c.next, -1), true)}` : ''}${note}</span></span><span class="cbar" aria-hidden="true">${bar}</span></button></li>`;
   }).join('');
-  return `${topbar('History')}<div class="hist-grid"><div class="hist-side">${stats}
-    <button class="btn wide" data-act="add-past">Add a past period</button></div>
-    <div class="hist-main">${ps.length ? `<ul class="hist-list">${rows}</ul>` : '<p class="fine">No periods logged yet.</p>'}</div></div>`;
+  const legend = '<p class="hist-legend fine"><span><i class="p"></i>Period</span><span><i class="f"></i>Fertile (est.)</span><span><i class="o"></i>Ovulation (est.)</span><span><i class="l"></i>Late</span><span><i class="g"></i>Pregnancy</span></p>';
+  return `${topbar('History')}<div class="chips hist-filters" role="tablist">${filters.map(([v, l]) => `<button class="chip ${f === v ? 'on' : ''}" aria-pressed="${f === v}" data-act="hist-filter" data-v="${v}">${l}</button>`).join('')}</div>
+    <div class="hist-grid"><div class="hist-side">${stats}<button class="btn wide" data-act="add-past">Add a past period</button>${legend}</div>
+    <div class="hist-main">${list.length ? `<ul class="hist-list">${rows}</ul>` : '<p class="fine">No periods logged here.</p>'}</div></div>`;
 }
 
 // ---------------- Settings (FR-10, FR-11, FR-27, NFR-13) ----------------
+// U4 (v4): Settings is a short list; each item opens its own page
+const SET_PAGES = [
+  ['cycle', 'Your cycle'], ['look', 'Look'], ['display', 'Display and hide'],
+  ['sync', 'Google Drive sync'], ['backup', 'Backup and import'], ['report', 'Export report'],
+  ['privacy', 'Privacy and Face ID'], ['guide', 'Guide'], ['about', 'About and sources'],
+];
+function setValue(k) {
+  const s = S.data.settings, l = look(), dsp = display();
+  if (k === 'cycle') return [s.usualCycle ? `Usual cycle ${s.usualCycle} days` : 'Usual lengths not set', s.birthYear ? `born ${s.birthYear}` : ''].filter(Boolean).join(' · ');
+  if (k === 'look') return `${({ auto: 'Automatic', light: 'Light', dark: 'Dark' })[l.mode]} · ${(TH.THEMES[l.theme] || {}).name || ''}`;
+  if (k === 'display') return `${fmt(today())} · week starts ${dsp.weekStart === 'sun' ? 'Sunday' : 'Monday'}`;
+  if (k === 'sync') return S.meta.cloud && S.meta.cloud.fileId ? (tokenOk() ? `On${S.cloud.token.email ? ` · ${S.cloud.token.email}` : ''}` : 'On · sign in to sync') : 'Off';
+  if (k === 'backup') return 'Export or import your data';
+  if (k === 'report') return 'PDF for you or your doctor';
+  if (k === 'privacy') return S.meta.lock ? 'Face ID on · locks after 5 min' : 'Locks after 5 min';
+  if (k === 'guide') return 'How Cycle works';
+  return `Version ${VERSION}`;
+}
 function settingsView() {
+  const pg = S.setPage;
+  if (!pg) {
+    const groups = [SET_PAGES.slice(0, 3), SET_PAGES.slice(3, 6), SET_PAGES.slice(6)];
+    return `${topbar('Settings', `Cycle ${VERSION}`)}${groups.map((g) => `<section class="card set-list">${g.map(([k, t]) => `<button class="set-row" data-act="set-page" data-v="${k}"><span><span class="t">${t}</span><span class="v">${h(setValue(k))}</span></span><span class="chev" aria-hidden="true">›</span></button>`).join('')}</section>`).join('')}`;
+  }
+  const title = (SET_PAGES.find((x) => x[0] === pg) || [, ''])[1];
+  return `<button class="link back" data-act="set-page" data-v="">‹ Settings</button>${topbar(title)}<div class="settings-page">${setPage(pg)}</div>`;
+}
+function setPage(pg) {
   const s = S.data.settings;
-  return `${topbar('Settings', `Cycle ${VERSION}`)}<div class="settings-grid">
-  <section class="card"><h2>Your cycle</h2>
-    <form class="stack" data-form="settings">
+  if (pg === 'cycle') return `<section class="card"><form class="stack" data-form="settings">
       <label>Usual cycle length, in days<input type="number" name="usualCycle" min="15" max="90" inputmode="numeric" placeholder="I don't know" value="${h(s.usualCycle || '')}"></label>
       <label>Usual period length, in days<input type="number" name="usualPeriod" min="1" max="15" inputmode="numeric" placeholder="I don't know" value="${h(s.usualPeriod || '')}"></label>
-      <label>Age<select name="ageBand">${s.ageBand ? '' : '<option value="" selected>Choose</option>'}${[['18-25', '18–25'], ['26-41', '26–41'], ['42-45', '42–45'], ['other', 'Other']].map(([v, t]) => `<option value="${v}" ${s.ageBand === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Year of birth<input type="number" name="birthYear" min="1940" max="${+today().slice(0, 4) - 10}" inputmode="numeric" placeholder="Optional" value="${h(s.birthYear || '')}"></label>
       <label>Diet<select name="diet">${s.diet ? '' : '<option value="" selected>Choose</option>'}${T.DIETS.map(([v, t]) => `<option value="${v}" ${s.diet === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-      <p class="fine">Once you have 3 logged cycles, predictions use your own history and the usual lengths above no longer matter.</p>
-      <button class="btn">Save</button></form></section>
-  ${lookCard()}
-  <section class="card"><h2>Pregnancy-chance wording</h2>
-    <p class="fine">Shows fertile days as "High" or "Higher chance of pregnancy", with a warning. No day is ever shown as safe.</p>
-    <label class="switch"><span>Show pregnancy-chance wording</span><input type="checkbox" role="switch" data-act="wording" ${s.wording ? 'checked' : ''}></label></section>
-  <section class="card"><h2>Support line</h2>
-    <p class="fine">A crisis or counselling line you would call. Cycle shows it on the low-mood card. It is stored only in your encrypted data.</p>
-    <form class="stack" data-form="helpline"><label>Name<input type="text" name="name" maxlength="40" value="${h((s.helpline || {}).name || '')}" placeholder="Optional"></label>
+      <button class="btn primary">Save</button></form>${info('lengths')}</section>
+    <section class="card"><label class="switch"><span>Pregnancy-chance wording</span><input type="checkbox" role="switch" data-act="wording" ${s.wording ? 'checked' : ''}></label>${info('safe')}</section>
+    <section class="card"><h2>Support line</h2><form class="stack" data-form="helpline"><label>Name<input type="text" name="name" maxlength="40" value="${h((s.helpline || {}).name || '')}" placeholder="Optional"></label>
       <label>Phone number<input type="tel" name="number" maxlength="25" inputmode="tel" value="${h((s.helpline || {}).number || '')}" placeholder="Not set"></label>
-      <button class="btn">Save</button></form></section>
-  <section class="card"><h2>App lock</h2>
+      <button class="btn">Save</button></form><p class="fine">Shown on the low-mood card. Stored only encrypted.</p></section>`;
+  if (pg === 'look') return lookCard();
+  if (pg === 'display') {
+    const d = display(); const seg = (act, items, cur) => `<div class="seg2" role="group">${items.map(([v, t]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${t}</button>`).join('')}</div>`;
+    const ex = today(); const [y, m, dd] = ex.split('-').map(Number);
+    const fmts = [['dmy', `${dd} ${MONTHS[m - 1].slice(0, 3)}`], ['mdy', `${MONTHS[m - 1].slice(0, 3)} ${dd}`], ['num', `${String(dd).padStart(2, '0')}/${String(m).padStart(2, '0')}`]];
+    const rows = [['symptoms', 'Symptoms'], ['moods', 'Moods'], ['predictions', 'Ovulation and fertile days'], ['tests', 'Ovulation tests'], ['sex', 'Sex life']];
+    return `<section class="card"><h2>Date format</h2>${seg('disp-date', fmts, d.dateFmt)}<h2>First day of week</h2>${seg('disp-week', [['mon', 'Monday'], ['sun', 'Sunday']], d.weekStart)}</section>
+      <section class="card"><h2>Show in Cycle</h2>${rows.map(([k, t]) => `<label class="switch"><span>${t}</span><input type="checkbox" role="switch" data-act="hide-tog" data-k="${k}" ${hidden(k) ? '' : 'checked'}></label>`).join('')}
+        <p class="fine">Off hides it everywhere, including the export. Nothing is deleted. Safety warnings always show.</p>
+        ${hidden('tests') ? '<button class="link danger-link" data-act="del-cat" data-k="ovu">Delete all logged ovulation tests…</button>' : ''}${hidden('sex') ? '<button class="link danger-link" data-act="del-cat" data-k="sex">Delete all logged sex-life data…</button>' : ''}</section>`;
+  }
+  if (pg === 'sync') return syncCard();
+  if (pg === 'backup') return `<section class="card"><h2>Export</h2><div class="stack-btns"><button class="btn" data-act="export-enc">Encrypted backup</button><button class="btn" data-act="export-json">Plain backup</button><button class="btn" data-act="export-csv">Periods as CSV</button></div>
+      <details><summary>Which one?</summary><p class="fine">An encrypted backup opens only with your passphrase. A plain backup and the CSV can be read by anyone who gets them.</p></details></section>
+    <section class="card"><h2>Import</h2><div class="stack-btns"><label class="btn file">Import a file<input type="file" accept="${PICK}" data-act="import-json" hidden></label><button class="btn" data-act="paste-open">Paste dates</button></div>
+      <details><summary>How to</summary><ol class="steps"><li>Choose a Cycle backup, a PDF, a CSV or a text file, or paste dates.</li><li>Check the list. Nothing is added before you confirm.</li></ol></details></section>
+    <section class="card"><button class="btn danger wide" data-act="wipe">Delete all data on this device</button></section>`;
+  if (pg === 'report') return reportPage();
+  if (pg === 'privacy') return `<section class="card"><h2>App lock</h2>
     ${S.meta.lock ? '<p class="fine">Face ID unlock is on for this device.</p><button class="btn" data-act="faceid-off">Turn off Face ID</button>'
-      : S.faceIdOk ? '<p class="fine">Unlock with Face ID instead of typing your passphrase.</p><button class="btn" data-act="faceid-setup">Turn on Face ID</button>'
-        : '<p class="fine">Face ID is not available in this browser. Cycle opens with your passphrase.</p>'}
-    <p class="fine">Cycle locks itself after 5 minutes in the background.</p>
-    <button class="btn" data-act="lock-now">Lock now</button></section>
-  <section class="card"><h2>Change passphrase</h2>
+      : S.faceIdOk ? '<button class="btn" data-act="faceid-setup">Turn on Face ID</button>' : '<p class="fine">Face ID is not available in this browser.</p>'}
+    <p class="fine">Cycle locks itself after 5 minutes in the background.</p><button class="btn" data-act="lock-now">Lock now</button></section>
+    <section class="card"><h2>Change passphrase</h2>
     <form class="stack" data-form="change-pass">${USER}${pw('cur', 'Current passphrase', 'current-password', false, 0)}${pw('p1', 'New passphrase', 'new-password')}${pw('p2', 'Repeat new passphrase', 'new-password')}
-      <p class="fine">Changes it on this device${S.meta.cloud && S.meta.cloud.fileId ? ' and in your Google Drive vault. Your other devices will ask for the new passphrase once' : ''}.${S.meta.lock ? ' Face ID needs to be turned on again afterwards.' : ''}</p>
-      <button class="btn">Change passphrase</button></form></section>
-  ${syncCard()}
-  <section class="card"><h2>Your data</h2>
-    <p class="fine">An encrypted backup opens only with the passphrase you use now. A plain backup and the CSV file are readable by anyone who gets them, so keep those somewhere private.</p>
-    <div class="row"><button class="btn" data-act="export-enc">Export encrypted backup</button><button class="btn" data-act="export-json">Export plain backup</button><button class="btn" data-act="export-csv">Export periods as CSV</button></div>
-    <p class="fine">To bring in periods: tap <strong>Import a backup</strong> and choose a Cycle backup, a PDF, a CSV or a text file, or tap <strong>Paste dates</strong>. You check the list before anything is added.</p>
-    <div class="row"><label class="btn file">Import a backup<input type="file" accept="${PICK}" data-act="import-json" hidden></label><button class="btn" data-act="paste-open">Paste dates</button></div>
-    <button class="btn danger" data-act="wipe">Delete all data on this device</button></section>
-  <section class="card about"><h2>About</h2>
-    <p class="fine">Cycle ${VERSION}. A wellness tracker, not medical advice and not a method of birth control. Predictions, suggestions and food lists follow these sources:</p>
+      <button class="btn">Change passphrase</button></form>${info('privacy')}</section>`;
+  if (pg === 'guide') return guidePage();
+  return `<section class="card about"><p class="fine">Cycle ${VERSION}. A wellness tracker, not medical advice and not a method of birth control.</p>
     <ul class="fine sources">
       <li>Bull et al. 2019, 612,613 cycles (npj Digital Medicine): luteal phase 12.4 ± 2.4 days, mean cycle 29.3 days, bleed 4.0 days</li>
       <li>Wilcox 2000 and ACOG: fertile window from 5 days before to 1 day after ovulation</li>
@@ -667,7 +748,24 @@ function settingsView() {
       <li>ACOG: 12–24 pregnancies per 100 women in the first year of typical fertility-awareness use</li>
       <li>ACOG, Mayo Clinic and CDC: suggestions for symptoms and the warning signs for heavy or unusual bleeding</li>
       <li>NIH Office of Dietary Supplements: iron needs, iron in foods, and what helps or reduces its absorption</li>
-    </ul></section></div>`;
+      <li>NHS: stopped or missed periods; ectopic pregnancy (late period check)</li>
+    </ul></section>`;
+}
+// U4: an ⓘ button opens the matching Guide entry
+const info = (id) => `<button class="info-btn" data-act="guide" data-id="${id}" aria-label="About this">i</button>`;
+function guidePage() {
+  const open = S.guideOpen;
+  return `<section class="card set-list guide">${T.GUIDE.filter(([id]) => !(id === 'tests' && hidden('tests'))).map(([id, t, body, src]) => `<details id="g-${id}" ${open === id ? 'open' : ''}><summary>${h(t)}</summary><p>${h(body)}</p>${src && T.SRC[src] ? `<p class="fine">Source: <a href="${T.SRC[src].url}" target="_blank" rel="noopener">${h(T.SRC[src].name)}</a></p>` : ''}</details>`).join('')}</section>`;
+}
+// R4: export report page
+function reportPage() {
+  const r = S.report || (S.report = { range: '12m', on: { periods: true, flow: true, symptoms: true, moods: true, tests: true, sex: false, notes: false } });
+  const items = [['periods', 'Periods and cycle lengths'], ['flow', 'Bleeding'], ['symptoms', 'Symptoms'], ['moods', 'Moods'], ['tests', 'Ovulation tests'], ['sex', 'Sex life'], ['notes', 'Notes']]
+    .filter(([k]) => !((k === 'symptoms' && hidden('symptoms')) || (k === 'moods' && hidden('moods')) || (k === 'tests' && hidden('tests')) || (k === 'sex' && hidden('sex'))));
+  return `<section class="card"><h2>Time</h2><div class="seg2" role="group">${[['6m', 'Last 6 months'], ['12m', 'Last 12 months'], ['all', 'Everything']].map(([v, t]) => `<button data-act="rep-range" data-v="${v}" aria-pressed="${r.range === v}">${t}</button>`).join('')}</div></section>
+    <section class="card"><h2>Choose data</h2>${items.map(([k, t]) => `<label class="switch"><span>${t}</span><input type="checkbox" role="switch" data-act="rep-tog" data-k="${k}" ${r.on[k] ? 'checked' : ''}></label>`).join('')}
+      <p class="fine">Made on this device, nothing is uploaded. The share sheet opens: save to Files, AirDrop, Mail or print.</p></section>
+    <button class="btn primary wide" data-act="rep-make">Create PDF report</button>`;
 }
 function lookCard() {
   const l = look();
@@ -684,7 +782,7 @@ function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
   const c = S.cloud, m = S.meta.cloud;
   let body;
-  const who = c.token && c.token.email ? `<p class="fine">Signed in as <strong>${h(c.token.email)}</strong>. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
+  const who = tokenOk() ? `<p class="fine">${c.token.email ? `Signed in as <strong>${h(c.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
   if (c.existing) body = `${who}<p class="fine">A Cycle vault already exists in this Google account. Choose one:</p>
     <ol class="steps"><li><strong>Join it:</strong> enter that vault's passphrase below. The ${plural(livePeriods(S.data.periods).length, 'period')} on this device are merged into the vault, and this device switches to the vault's passphrase.</li>
       <li><strong>Wrong account?</strong> Tap <em>Use a different Google account</em> above.</li>
@@ -709,7 +807,7 @@ function topbar(title, sub = '') {
 function syncPill() {
   if (!cfg.googleClientId || !S.meta || !S.meta.cloud || !S.meta.cloud.fileId) return '';
   const c = S.cloud; const txt = c.busy ? 'Syncing' : !tokenOk() ? 'Sign in to sync' : c.status === 'error' ? 'Sync problem' : S.meta.cloud.dirty ? 'Saving' : 'Synced';
-  return `<button class="pill ${c.status === 'error' ? 'bad' : tokenOk() && !c.busy ? 'ok' : ''}" data-tab="settings">${txt}</button>`;
+  return `<button class="pill ${c.status === 'error' ? 'bad' : tokenOk() && !c.busy ? 'ok' : ''}" data-tab="settings" data-page="sync">${txt}</button>`;
 }
 function navBar() {
   const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'], ['food', 'Food', '<path d="M12 21c-4.5 0-7-3.5-7-7.5C5 9 8 6 12 6s7 3 7 7.5c0 4-2.5 7.5-7 7.5z"/><path d="M12 6c0-1.6 1-3 2.5-3.5"/>'],
@@ -733,10 +831,12 @@ function sheetBody() {
     }
     return `<h2>${weekday(d)}, ${fmt(d, true)}</h2><p class="fine">${h(describe(info)).replace(/^./, (c) => c.toUpperCase())}.${future ? ' Future days show estimates only.' : ''}</p>
       ${future ? '' : `<h3>Bleeding</h3><div class="chips">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" data-act="flow" data-date="${d}" data-flow="${v}">${l}</button>`).join('')}</div>`}
+      ${future ? '' : testSection(d)}${future ? '' : sexSection(d)}
       ${future ? '' : daySymptoms(d)}
       <div class="stack-btns">${acts}<button class="btn" data-act="close-sheet">Close</button></div>`;
   }
   if (s.name === 'checkin') return checkinSheet(s.date);
+  if (s.name === 'late') return lateSheet();
   if (s.name === 'confirm-start') {
     const cd = S.pred && !S.pred.empty ? diff(s.date, S.pred.lastStart) + 1 : null;
     const mid = cd && cd >= 10 && cd <= 18;
@@ -752,7 +852,7 @@ function sheetBody() {
         <label>First day of bleeding<input type="date" name="start" max="${t}" required value="${h(p.start)}" autofocus></label>
         <label>Last day of bleeding<input type="date" name="end" max="${t}" value="${h(p.end || '')}"><span class="fine">Leave empty if it hasn't ended or you don't remember.</span></label>
         ${s.name === 'edit' ? `<label class="choice"><input type="checkbox" name="excluded" ${p.excluded ? 'checked' : ''}> Leave this cycle out of predictions</label>
-        <label>Reason<select name="excludeReason">${['', 'Illness', 'Travel', 'Stopped hormonal contraception', 'Missed logging', 'Other'].map((r) => `<option ${p.excludeReason === r ? 'selected' : ''} value="${r}">${r || 'None'}</option>`).join('')}</select></label>` : ''}
+        <label>Reason<select name="excludeReason">${['', 'Pregnancy', 'Illness', 'Travel', 'Stopped hormonal contraception', 'Missed logging', 'Other'].map((r) => `<option ${p.excludeReason === r ? 'selected' : ''} value="${r}">${r || 'None'}</option>`).join('')}</select></label>` : ''}
         <button class="btn primary">Save</button>
       </form>
       ${s.name === 'edit' ? `<button class="btn danger wide" data-act="delete-period" data-id="${p.id}">Delete this period</button>` : ''}
@@ -782,11 +882,59 @@ function sheetBody() {
   }
   return '';
 }
+// v4 (R7a): ovulation tests, several a day, each with its time and a remove button (I2)
+const TESTS = [['neg', 'Negative'], ['pos', 'Positive'], ['peak', 'Peak']];
+const anyLogged = (f) => Object.values(S.data.days).some((x) => x && (Array.isArray(x[f]) ? x[f].length : x[f] && x[f].kind && x[f].kind !== 'none'));
+const newBadge = (f) => (anyLogged(f) ? '' : ' <span class="badge-new">New</span>');
+function testSection(d) {
+  if (hidden('tests')) return '';
+  const list = ((S.data.days[d] || {}).ovu || []);
+  const label = (r) => (TESTS.find((x) => x[0] === r) || [r, r])[1];
+  return `<h3>Ovulation test${newBadge('ovu')}</h3><div class="chips">${TESTS.map(([v, l]) => `<button class="chip" data-act="ovu-add" data-date="${d}" data-r="${v}">${l}</button>`).join('')}</div>
+    ${list.map((x, i) => [x, i]).sort((u, v) => String(u[0].at || '').localeCompare(String(v[0].at || ''))).map(([x, i]) => `<div class="logrow"><span>${h(x.at || '')} · ${label(x.r)}</span><button class="icon-x" data-act="ovu-del" data-date="${d}" data-i="${i}" aria-label="Remove this test">✕</button></div>`).join('')}
+    ${list.some((x) => x.r !== 'neg') ? '<p class="fine">Ovulation usually follows within 1–2 days. An estimate, never a "safe" day.</p>' : ''}`;
+}
+// v4 (R7b): sex life, one entry a day with an optional note; can be hidden completely
+const SEX = [['none', 'None'], ['protected', 'Protected'], ['unprotected', 'Unprotected']];
+function sexSection(d) {
+  if (hidden('sex')) return '';
+  const x = (S.data.days[d] || {}).sex || {}; const k = x.kind || 'none';
+  return `<h3>Sex life${newBadge('sex')}</h3><div class="chips">${SEX.map(([v, l]) => `<button class="chip ${k === v ? 'on' : ''}" aria-pressed="${k === v}" data-act="sex" data-date="${d}" data-kind="${v}">${l}</button>`).join('')}</div>
+    ${k !== 'none' ? `<label class="stack fine">Note (optional)<input type="text" maxlength="200" value="${h(x.note || '')}" data-act="sex-note" data-date="${d}"></label>` : ''}`;
+}
 function daySymptoms(d) {
   const ci = S.data.checkins[d];
   const logged = ci ? Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`) : [];
   return `<h3>Check-in</h3><p class="fine">${ci ? (logged.length ? h(logged.join(', ')) : 'No symptoms logged.') + (ci.note ? ` Note: ${h(ci.note)}` : '') : 'No check-in for this day.'}</p>
-    <button class="btn small" data-act="checkin" data-date="${d}">${ci ? 'Edit check-in' : 'Add a check-in for this day'}</button>`;
+    <button class="btn small" data-act="checkin" data-date="${d}">${noteOnly() ? (ci ? 'Edit note' : 'Add note') : ci ? 'Edit check-in' : 'Add a check-in for this day'}</button>`;
+}
+// v4 (R8): late period check, 5 short steps; answers stay in memory unless saved to today's note
+function lateSheet() {
+  const L = S.late || { step: 1, changes: [], signs: [] }; const p = S.pred; const st = p.state;
+  const bar = `<div class="steps-bar" aria-label="Step ${L.step} of 5"><i style="width:${L.step * 20}%"></i></div>`;
+  const head = `<div class="late-head">${L.step > 1 ? '<button class="link" data-act="late-back">‹ Back</button>' : '<span></span>'}<span class="fine">Step ${L.step} of 5</span></div>${bar}`;
+  const title = `<h2>${st.stale ? 'No period logged for a long time' : `Period ${plural(st.daysLate, 'day')} late`}</h2>`;
+  const chips = (list, key) => `<div class="chips">${list.map(([v, l]) => `<button class="chip ${L[key].includes(v) ? 'on' : ''}" aria-pressed="${L[key].includes(v)}" data-act="late-tog" data-k="${key}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  const next = '<button class="btn primary wide" data-act="late-next">Next</button>';
+  if (L.step === 1) {
+    const done = cycles(S.data.periods).filter((c) => c.valid && !c.excluded).slice(-3).reverse();
+    const max = Math.max(st.cycleDay, ...done.map((c) => c.length), 1);
+    const row = (label, n, now) => `<div class="cmp"><span class="fine">${label}</span><span class="cmp-row"><span class="cmp-track"><i class="${now ? 'now' : ''}" style="width:${Math.round(n / max * 100)}%"></i></span><b>${plural(n, 'day')}</b></span></div>`;
+    return `${head}${title}<h3>This cycle compared with your others</h3>${row(`This cycle so far (from ${fmt(p.lastStart)})`, st.cycleDay, true)}${done.map((c) => row(`${fmt(c.start)} – ${fmt(addDays(c.next, -1))}`, c.length)).join('')}${next}`;
+  }
+  if (L.step === 2) return `${head}<h2>Could you be pregnant?</h2><div class="stack-btns">${[['yes', 'Yes, possibly'], ['no', 'No'], ['unsure', 'Not sure']].map(([v, l]) => `<button class="btn ${L.preg === v ? 'primary' : ''}" data-act="late-preg" data-v="${v}">${l}</button>`).join('')}</div>`;
+  if (L.step === 3) return `${head}<h2>Anything new in the last 2 months?</h2><p class="fine">Choose all that apply.</p>${chips(T.LATE_CHANGES, 'changes')}${next}`;
+  if (L.step === 4) return `${head}<h2>Any of these as well?</h2><p class="fine">Choose all that apply, or none.</p>${chips(T.LATE_SIGNS, 'signs')}${next}`;
+  const r = lateResult(L, age());
+  return `${head}<h2>What could be behind it</h2>
+    <section class="card"><h3>From your answers</h3>${r.reasons.length ? r.reasons.map((x) => `<p>${h(x.text)}</p>`).join('') : '<p class="fine">None of the usual reasons were chosen.</p>'}
+      <details><summary>Other possible reasons</summary><ul>${r.other.map((x) => `<li>${h(x)}</li>`).join('')}</ul></details></section>
+    <section class="card"><h3>Next steps</h3><ol class="steps">${r.steps.map((x) => `<li>${h(x)}</li>`).join('')}</ol>
+      ${L.preg === 'yes' ? '<button class="btn small" data-act="late-preg-mark">My test is positive: mark this cycle as pregnancy</button>' : ''}</section>
+    <section class="card"><h3>See a doctor if</h3><ul>${r.doctor.map((x) => `<li>${h(x)}</li>`).join('')}</ul></section>
+    <section class="note urgent"><p><strong>${h(r.urgent[0])}</strong></p><p><strong>${h(r.urgent[1])}</strong></p></section>
+    <div class="row"><button class="btn" data-act="late-save">Save to today's note</button><button class="btn primary" data-act="close-sheet">Done</button></div>
+    <p class="fine">Not a diagnosis. Based on <a href="${T.SRC.nhsMissed.url}" target="_blank" rel="noopener">${T.SRC.nhsMissed.name}</a> and <a href="${T.SRC.nhsEctopic.url}" target="_blank" rel="noopener">${T.SRC.nhsEctopic.name}</a>.</p>`;
 }
 function confirmSheet(title, text, yes, fn, danger = false) { S.confirmFn = fn; openSheet('confirm', { title, text, yes, danger }); }
 
@@ -820,7 +968,7 @@ async function endPeriod(date) {
   await persist(); S.sheet = null; render(); toast(`Period end saved: ${fmt(date)}`);
 }
 async function setFlow(date, flow) {
-  S.data.days[date] = { flow, updatedAt: Date.now() };
+  setDay(date, 'flow', flow);
   await persist();
   const info = S.pred && !S.pred.empty ? dayInfo(date, S.pred, S.data.periods, S.data.days) : {};
   if (['light', 'medium', 'heavy'].includes(flow) && !info.logged) { openSheet('confirm-start', { date, flow }); return; }
@@ -830,7 +978,7 @@ async function setFlow(date, flow) {
 // ---------------- events ----------------
 document.addEventListener('click', async (e) => {
   const tabBtn = e.target.closest('[data-tab]');
-  if (tabBtn) { S.tab = tabBtn.dataset.tab; S.sheet = null; render(); window.scrollTo(0, 0); return; }
+  if (tabBtn) { S.tab = tabBtn.dataset.tab; S.setPage = tabBtn.dataset.page || null; S.sheet = null; render(); window.scrollTo(0, 0); return; }
   const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT') return;
   const a = b.dataset.act, d = b.dataset.date;
   try {
@@ -861,6 +1009,33 @@ document.addEventListener('click', async (e) => {
     else if (a === 'faceid-setup') await faceIdSetup();
     else if (a === 'unlock-faceid') await unlockFaceId();
     else if (a === 'close-sheet') closeSheet();
+    else if (a === 'set-page') { S.setPage = b.dataset.v || null; S.guideOpen = null; render(); window.scrollTo(0, 0); }
+    else if (a === 'guide') { S.tab = 'settings'; S.setPage = 'guide'; S.guideOpen = b.dataset.id; S.sheet = null; render(); const g = document.getElementById(`g-${b.dataset.id}`); if (g) g.scrollIntoView({ block: 'center' }); }
+    else if (a === 'disp-date' || a === 'disp-week') { const k = a === 'disp-date' ? 'dateFmt' : 'weekStart'; S.data.settings = { ...S.data.settings, display: { ...display(), [k]: b.dataset.v, updatedAt: Date.now() }, updatedAt: Date.now() }; await persist(); render(); }
+    else if (a === 'del-cat') confirmSheet(b.dataset.k === 'sex' ? 'Delete all sex-life data?' : 'Delete all ovulation tests?', 'Removed on this device and, with sync on, in your Google Drive vault. This cannot be undone.', 'Delete', async () => {
+      for (const d0 of Object.keys(S.data.days)) if (S.data.days[d0][b.dataset.k] !== undefined) setDay(d0, b.dataset.k, b.dataset.k === 'sex' ? { kind: 'none' } : []);
+      await persist(); closeSheet(); toast('Deleted');
+    }, true);
+    else if (a === 'rep-range') { S.report.range = b.dataset.v; render(); }
+    else if (a === 'rep-make') await makeReport();
+    else if (a === 'hist-filter') { S.histFilter = b.dataset.v; render(); }
+    else if (a === 'late-check') { S.late = { step: 1, changes: [], signs: [] }; openSheet('late'); }
+    else if (a === 'late-next') { S.late.step = Math.min(5, S.late.step + 1); render(); }
+    else if (a === 'late-back') { S.late.step = Math.max(1, S.late.step - 1); render(); }
+    else if (a === 'late-preg') { S.late.preg = b.dataset.v; S.late.step = 3; render(); }
+    else if (a === 'late-tog') { const arr = S.late[b.dataset.k]; const i = arr.indexOf(b.dataset.v); if (i >= 0) arr.splice(i, 1); else arr.push(b.dataset.v); render(); }
+    else if (a === 'late-save') {
+      const t = today(); const L = S.late; const st = S.pred.state; const names = [...T.LATE_CHANGES.filter(([c]) => L.changes.includes(c)).map((x) => x[1].toLowerCase()), ...T.LATE_SIGNS.filter(([c]) => L.signs.includes(c)).map((x) => x[1].toLowerCase())];
+      const line = `Late check (${st.stale ? 'long gap' : `${st.daysLate} days late`}): ${names.length ? names.join(', ') : 'nothing new chosen'}${L.preg ? `; pregnancy ${L.preg === 'unsure' ? 'not sure' : L.preg}` : ''}.`;
+      const ci = S.data.checkins[t] || {}; // I1: added to the note, never overwriting it
+      S.data.checkins[t] = { ...ci, note: ci.note ? `${ci.note}\n${line}` : line, updatedAt: Date.now() }; await persist(); toast("Saved to today's note");
+    }
+    else if (a === 'late-preg-mark') confirmSheet('Mark this cycle as pregnancy?', 'Predictions and late alerts pause until you end pregnancy mode. You can change this any time in History.', 'Mark as pregnancy', async () => {
+      const lp = S.pred.lastPeriod; const p0 = S.data.periods.find((x) => x.id === lp.id); Object.assign(p0, { excluded: true, excludeReason: 'Pregnancy', updatedAt: Date.now() }); await persist(); closeSheet(); toast('Predictions paused');
+    });
+    else if (a === 'ovu-add') { const dd = S.data.days[d] || {}; const now = new Date(); setDay(d, 'ovu', [...(dd.ovu || []), { r: b.dataset.r, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` }]); await persist(); render(); }
+    else if (a === 'ovu-del') { const list = [...((S.data.days[d] || {}).ovu || [])]; list.splice(+b.dataset.i, 1); setDay(d, 'ovu', list); await persist(); render(); }
+    else if (a === 'sex') { const prev = (S.data.days[d] || {}).sex || {}; setDay(d, 'sex', b.dataset.kind === 'none' ? { kind: 'none' } : { ...prev, kind: b.dataset.kind }); await persist(); render(); }
     else if (a === 'period-start') await startPeriod(d);
     else if (a === 'period-end') await endPeriod(d);
     else if (a === 'period-end-earlier') openSheet('period-end-earlier');
@@ -884,18 +1059,18 @@ document.addEventListener('click', async (e) => {
     else if (a === 'export-json') download(`cycle-backup-${today()}.json`, JSON.stringify(S.data, null, 1), 'application/json');
     else if (a === 'export-csv') download(`cycle-periods-${today()}.csv`, csv(), 'text/csv');
     else if (a === 'wipe') confirmSheet('Delete all data on this device?', 'Everything Cycle stores on this device is removed. Your Google Drive vault, if any, is not touched.', 'Delete everything', async () => {
-      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
+      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, late: null, report: null, setPage: null, guideOpen: null, histFilter: null, imp: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
     }, true);
     else if (a === 'gsignin') await signIn('sync', S.meta && S.meta.cloud && S.meta.cloud.fileId ? '' : 'select_account');
     else if (a === 'gswitch') { S.cloud.existing = null; await signIn('sync', 'select_account'); }
     else if (a === 'restore-switch') { S.restore = {}; await signIn('restore', 'select_account'); }
     else if (a === 'vault-new') confirmSheet('Start a new vault?', `The vault file already in this Google account is kept, renamed to a backup name, and is not deleted. A new vault is then created from the ${plural(livePeriods(S.data.periods).length, 'period')} on this device, using this device's passphrase. Other devices that used the old vault need Restore from Google Drive with the new passphrase.`, 'Start a new vault', async () => {
       closeSheet(); const old = S.cloud.existing; const stamp = localToday().replace(/-/g, '');
-      await cloudAction('New vault created', async () => { await C.renameFile(S.cloud.token.token, old.id, `cycle-vault-old-${stamp}.json`); S.cloud.existing = null; await createVaultFlow(); });
+      await cloudAction('New vault created', async () => { await C.renameFile(cloudTok(), old.id, `cycle-vault-old-${stamp}.json`); S.cloud.existing = null; await createVaultFlow(); });
     }, true);
     else if (a === 'vault-create') {
       busy(true, 'Checking Google Drive');
-      try { const files = await C.findVault(S.cloud.token.token); busy(false);
+      try { const files = await C.findVault(cloudTok()); busy(false);
         if (files.length) { S.cloud.existing = files[0]; render(); return; } }
       catch (e) { busy(false); throw e; }
       await cloudAction('Vault created', createVaultFlow);
@@ -904,7 +1079,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'disconnect') confirmSheet('Stop syncing this device?', 'Your data stays on this device and in Google Drive.', 'Disconnect', async () => {
       S.meta.cloud = null; await kvSet('meta', S.meta); closeSheet(); toast('Sync is off on this device');
     });
-  } catch (err) { console.error(err); toast(err.message || 'Something went wrong.'); }
+  } catch (err) { busy(false); lostSignIn(err); toast(friendly(err)); }
 });
 // B7: the checked list becomes a normal backup; from Settings it is merged (rows already in Cycle are left out), at start-up it needs a passphrase next
 function reviewContinue() {
@@ -930,6 +1105,9 @@ function reviewContinue() {
 }
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.dataset.act === 'hide-tog') { S.data.settings = { ...S.data.settings, hide: { ...(S.data.settings.hide || {}), [el.dataset.k]: !el.checked, updatedAt: Date.now() }, updatedAt: Date.now() }; await persist(); render(); return; }
+  if (el.dataset.act === 'rep-tog') { S.report.on[el.dataset.k] = el.checked; return; }
+  if (el.dataset.act === 'sex-note') { const prev = (S.data.days[el.dataset.date] || {}).sex || {}; setDay(el.dataset.date, 'sex', { ...prev, note: el.value.slice(0, 200) }); await persist(); return; }
   if (el.dataset.act === 'row-tick' && S.imp && S.imp.rows) { S.imp.rows[+el.dataset.i].off = !el.checked; el.closest('.irow').classList.toggle('off', !el.checked); return; }
   if (el.dataset.act === 'import-replace' && S.imp) { S.imp.replace = el.checked; return; }
   if (el.dataset.act === 'wording') {
@@ -953,7 +1131,7 @@ document.addEventListener('submit', async (e) => {
   try {
     if (kind === 'onboard') {
       const num = (k, lo, hi) => { const v = Number(fd.get(k)); return v >= lo && v <= hi ? v : null; };
-      S.draft = { last: fd.get('last'), usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand'), diet: fd.get('diet') };
+      S.draft = { last: fd.get('last'), usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), birthYear: num('birthYear', 1940, 2100), diet: fd.get('diet') };
       if (S.draft.last && diff(S.draft.last, today()) > 0) { toast('The last period cannot be in the future.'); return; }
       S.view = 'passphrase'; render();
     } else if (kind === 'passphrase') {
@@ -961,7 +1139,7 @@ document.addEventListener('submit', async (e) => {
       busy(true, 'Encrypting');
       const salt = K.newSalt(); S.key = await K.deriveKey(fd.get('p1'), salt);
       const d = S.draft; S.data = fresh();
-      S.data.settings = { usualCycle: d.usualCycle, usualPeriod: d.usualPeriod, ageBand: d.ageBand, diet: d.diet, accepted: new Date().toISOString(), wording: false, updatedAt: Date.now() };
+      S.data.settings = { usualCycle: d.usualCycle, usualPeriod: d.usualPeriod, birthYear: d.birthYear || null, diet: d.diet, accepted: new Date().toISOString(), wording: false, updatedAt: Date.now() };
       if (d.last) S.data.periods.push({ id: uid(), start: d.last, updatedAt: Date.now() });
       S.meta = { salt, iter: K.ITER, created: new Date().toISOString(), lock: null, cloud: null };
       await kvSet('meta', S.meta); await persist(); S.draft = {};
@@ -1009,23 +1187,28 @@ document.addEventListener('submit', async (e) => {
       else S.data.periods.push({ id: uid(), start, end, updatedAt: Date.now() });
       await persist(); closeSheet(); toast('Period saved');
     } else if (kind === 'checkin') {
-      const date = f.dataset.date; const symptoms = {};
+      const date = f.dataset.date; const prev = S.data.checkins[date] || {};
+      // G5-2: entries this form does not show (a hidden category) are kept, never erased
+      const shown = new Set([...f.querySelectorAll('[name^=s_], [name^=g_]')].map((x) => x.name.slice(2)));
+      const symptoms = Object.fromEntries(Object.entries(prev.symptoms || {}).filter(([k]) => !shown.has(k)));
       for (const [k, v] of fd.entries()) {
         if (k.startsWith('s_') && Number(v) > 0) symptoms[k.slice(2)] = Number(v);
         if (k.startsWith('g_')) symptoms[k.slice(2)] = 1;
       }
-      const ci = { symptoms, updatedAt: Date.now() };
+      // G5-3: fields this form does not know are kept; the ones it edits are set again from the form
+      const ci = { ...prev, symptoms, updatedAt: Date.now() };
+      for (const k of ['change', 'discharge', 'clots', 'dizzy', 'sidepain', 'meds', 'note']) if (f.querySelector(`[name=${k}]`)) delete ci[k];
       for (const k of ['change', 'discharge']) if (fd.get(k)) ci[k] = fd.get(k);
       for (const k of ['clots', 'dizzy', 'sidepain']) if (fd.has(k)) ci[k] = fd.get(k) === '1';
       if ((fd.get('meds') || '').trim()) ci.meds = fd.get('meds').trim();
       if ((fd.get('note') || '').trim()) ci.note = fd.get('note').trim();
       S.data.checkins[date] = ci;
-      if (fd.has('flow') && fd.get('flow') !== ((S.data.days[date] || {}).flow || 'none')) S.data.days[date] = { flow: fd.get('flow'), updatedAt: Date.now() };
+      if (fd.has('flow') && fd.get('flow') !== ((S.data.days[date] || {}).flow || 'none')) setDay(date, 'flow', fd.get('flow'));
       await persist(); S.sheet = null; render(); window.scrollTo(0, 0); toast('Check-in saved');
     } else if (kind === 'end-earlier') await endPeriod(fd.get('end'));
     else if (kind === 'settings') {
       const num = (k, lo, hi) => { const v = Number(fd.get(k)); return v >= lo && v <= hi ? v : null; };
-      S.data.settings = { ...S.data.settings, usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), ageBand: fd.get('ageBand') || null, diet: fd.get('diet') || null, updatedAt: Date.now() };
+      S.data.settings = { ...S.data.settings, usualCycle: num('usualCycle', 15, 90), usualPeriod: num('usualPeriod', 1, 15), birthYear: num('birthYear', 1940, 2100), diet: fd.get('diet') || null, updatedAt: Date.now() };
       await persist(); render(); toast('Saved');
     } else if (kind === 'helpline') {
       const number = (fd.get('number') || '').trim(); const name = (fd.get('name') || '').trim().slice(0, 40);
@@ -1033,12 +1216,12 @@ document.addEventListener('submit', async (e) => {
       S.data.settings = { ...S.data.settings, helpline: number ? { name, number } : null, updatedAt: Date.now() };
       await persist(); render(); toast(number ? 'Support line saved' : 'Support line removed');
     }
-  } catch (err) { busy(false); toast(err.message || 'Something went wrong.'); }
+  } catch (err) { busy(false); lostSignIn(err); toast(friendly(err)); }
 });
 
 function busy(on, msg = '') { const b = $('#busy'); b.hidden = !on; b.querySelector('span').textContent = msg; }
 function afterUnlock() { busy(false); recompute(); S.view = 'app'; render(); if (cloudReady()) syncNow(true); }
-function lockApp() { S.key = null; S.data = null; S.pred = null; S.sheet = null; S.view = 'locked'; render(); }
+function lockApp() { Object.assign(S, { key: null, data: null, pred: null, sheet: null, late: null, report: null, setPage: null, guideOpen: null, histFilter: null, imp: null, view: 'locked' }); render(); }
 
 // ---------------- Face ID ----------------
 async function faceIdSetup() {
@@ -1059,6 +1242,18 @@ async function unlockFaceId() {
 // ---------------- Google Drive sync ----------------
 const cloudReady = () => !!(cfg.googleClientId && S.meta && S.meta.cloud && S.meta.cloud.fileId && S.key);
 const tokenOk = () => !!(S.cloud.token && S.cloud.token.exp > Date.now());
+// B16 (v4): no Drive call without a valid sign-in; a lost sign-in sends her back one step with a plain message
+const SIGNIN_LOST = 'Your Google sign-in was lost. Tap Sign in with Google again.';
+function needToken(t) { if (!t || !t.token || (t.exp && t.exp <= Date.now())) throw Object.assign(new Error(SIGNIN_LOST), { code: 'signin' }); return t.token; }
+const cloudTok = () => needToken(S.cloud.token);
+const restoreTok = () => needToken(S.restore && S.restore.token);
+// raw program errors are never shown to her (they are logged instead)
+function friendly(err) { console.error(err); return err instanceof TypeError || err instanceof ReferenceError || !err.message ? 'Something went wrong. Please try again.' : err.message; }
+function lostSignIn(err) {
+  if (err.code !== 'signin' && err.code !== 401) return false;
+  if (S.view === 'restore') S.restore = {}; else { S.cloud.token = null; kvSet('gtoken', null); }
+  render(); return true;
+}
 // B10: the first sign-in always lets her choose the Google account; a later sign-in to an existing vault stays silent
 async function signIn(next, prompt = 'select_account') {
   if (!cfg.googleClientId) { toast('Google sync is not set up in config.js.'); return; }
@@ -1070,11 +1265,15 @@ async function signIn(next, prompt = 'select_account') {
   else { render(); if (cloudReady()) await syncNow(); }
 }
 async function findForRestore() {
-  const files = await C.findVault(S.restore.token.token);
-  S.restore.fileId = files.length ? files[0].id : null; render();
+  const st = S.restore; // B16: only the attempt that started the search gets its result
+  busy(true, 'Checking Google Drive');
+  let files;
+  try { files = await C.findVault(restoreTok()); } finally { busy(false); }
+  if (S.restore !== st) return;
+  st.fileId = files.length ? files[0].id : null; render();
 }
 async function restoreFlow(pass) {
-  const tok = S.restore.token.token; const text = await C.download(tok, S.restore.fileId);
+  const tok = restoreTok(); const text = await C.download(tok, S.restore.fileId);
   const head = C.vaultHeader(text); const key = await K.deriveKey(pass, head.salt, head.iter);
   const data = await C.openVault(text, key);
   const meta = await C.fileMeta(tok, S.restore.fileId);
@@ -1086,7 +1285,7 @@ async function restoreFlow(pass) {
 }
 // Join an existing vault (B1) or follow a passphrase change made on another device.
 async function joinVault(pass, fileId) {
-  const tok = S.cloud.token.token; const id = fileId || S.cloud.existing.id;
+  const tok = cloudTok(); const id = fileId || S.cloud.existing.id;
   const text = await C.download(tok, id); const head = C.vaultHeader(text);
   const key = await K.deriveKey(pass, head.salt, head.iter);
   const remote = await C.openVault(text, key);
@@ -1103,18 +1302,18 @@ async function changePassphrase(cur, next) {
   S.meta.salt = salt; S.meta.iter = K.ITER; S.meta.lock = null;
   await kvSet('meta', S.meta); await kvSet('sealed', await K.seal(S.data, S.key));
   if (S.meta.cloud && S.meta.cloud.fileId && tokenOk()) {
-    const res = await C.updateVault(S.cloud.token.token, S.meta.cloud.fileId, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
+    const res = await C.updateVault(cloudTok(), S.meta.cloud.fileId, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
     S.meta.cloud.remoteModified = res.modifiedTime; S.meta.cloud.dirty = false; await kvSet('meta', S.meta);
   } else if (S.meta.cloud && S.meta.cloud.fileId) { S.meta.cloud.dirty = true; await kvSet('meta', S.meta); }
 }
 async function createVaultFlow() {
-  const res = await C.createVault(S.cloud.token.token, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
+  const res = await C.createVault(cloudTok(), await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter));
   S.meta.cloud = { fileId: res.id, remoteModified: res.modifiedTime, lastSync: new Date().toISOString(), dirty: false };
   await kvSet('meta', S.meta);
 }
 async function cloudAction(done, fn) {
   busy(true, 'Talking to Google Drive');
-  try { await fn(); toast(done); } catch (e) { if (e.code === 401) { S.cloud.token = null; await kvSet('gtoken', null); } toast(e.message); }
+  try { await fn(); toast(done); } catch (e) { if (e.code === 401 || e.code === 'signin') { S.cloud.token = null; await kvSet('gtoken', null); } toast(friendly(e)); }
   finally { busy(false); render(); }
 }
 let pushTimer;
@@ -1127,7 +1326,7 @@ async function syncNow(quiet = false) {
   if (!cloudReady() || S.cloud.busy || S.cloud.status === 'newpass') return;
   if (!tokenOk()) { if (!quiet) toast('Sign in with Google to sync.'); render(); return; }
   S.cloud.busy = true; if (!quiet) render();
-  const tok = S.cloud.token.token, m = S.meta.cloud;
+  const tok = cloudTok(), m = S.meta.cloud;
   try {
     const fm = await C.fileMeta(tok, m.fileId);
     if (fm.modifiedTime !== m.remoteModified) {
@@ -1149,6 +1348,20 @@ async function syncNow(quiet = false) {
 }
 
 // ---------------- export ----------------
+async function makeReport() {
+  const r = S.report; const t = today();
+  const first = livePeriods(S.data.periods)[0];
+  const from = r.range === '6m' ? addDays(t, -182) : r.range === '12m' ? addDays(t, -365) : (first ? first.start : t);
+  const on = { ...r.on }; for (const k of ['symptoms', 'moods', 'tests', 'sex']) if (hidden(k)) on[k] = false;
+  busy(true, 'Making the report');
+  try {
+    const R = await import('./report.js');
+    const bytes = R.buildReport(S.data, { from, to: t, today: t, sections: on, fmt, pred: hidden('predictions') ? null : S.pred, label: T.label, moods: T.MOOD_GOOD.map((m) => m.code) });
+    busy(false);
+    const how = await R.shareOrDownload(bytes, `cycle-report-${t}.pdf`);
+    if (how === 'downloaded') toast('Report saved');
+  } catch (e) { busy(false); toast(friendly(e)); }
+}
 function download(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -1190,5 +1403,7 @@ function csv() {
 for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
 // I3: a redraw held back while she was typing is done once the field loses focus
+document.addEventListener('focusin', (e) => { if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && !/checkbox|radio|file/.test(e.target.type)) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => document.body.classList.remove('typing'), 50));
 document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
-window.__cycle = { busyEditing, softRender, S, predict, VERSION, render };
+window.__cycle = { busyEditing, softRender, S, predict, VERSION, render, findForRestore, restoreFlow, recompute, persist };

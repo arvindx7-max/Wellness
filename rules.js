@@ -1,6 +1,6 @@
 // Red-flag rules (spec 6.3) and recommendation lookup (spec 6.2). Pure functions, unit-tested.
 import { addDays, diff, livePeriods, isDate, periodEnd } from './engine.js';
-import { RECS, NO_REC, label } from './content.js';
+import { RECS, NO_REC, label, LATE_CHANGES, LATE_OTHER, LATE_DOCTOR, LATE_URGENT } from './content.js';
 
 const BLEED = ['spotting', 'light', 'medium', 'heavy'];
 const sev = (ci, code) => (ci && ci.symptoms && ci.symptoms[code]) || 0;
@@ -90,4 +90,20 @@ export function heavyDays(data, pred) {
   const ps = livePeriods(data.periods); if (!ps.length || !pred || pred.empty) return 0;
   const last = ps[ps.length - 1]; const r = periodRange(last, pred.periodLen, data.days);
   return Object.entries(data.days || {}).filter(([d, v]) => v.flow === 'heavy' && inRange(d, r)).length;
+}
+
+// v4 (R8): the late period check result. answers = { preg: 'yes'|'no'|'unsure', changes: [codes], signs: [codes] }.
+// The urgent warnings are always part of the result (G4-8), whatever the answers.
+export function lateResult(answers = {}, age = null) {
+  const preg = answers.preg || 'unsure', changes = answers.changes || [], signs = answers.signs || [];
+  const reasons = [];
+  if (preg !== 'no') reasons.push({ code: 'preg', text: `Pregnancy is ${preg === 'yes' ? 'possible' : 'not ruled out'}. A home test works from the first day of a missed period.` });
+  for (const [code, , text] of LATE_CHANGES) if (changes.includes(code)) reasons.push({ code, text });
+  if (signs.length) reasons.push({ code: 'signs', text: 'The other signs you chose can come with hormone conditions such as PMOS (formerly called PCOS) or thyroid problems. Worth checking with a doctor.' });
+  const other = age && age >= 40 ? [LATE_OTHER[0], ...LATE_OTHER.slice(1)] : [...LATE_OTHER.slice(1), LATE_OTHER[0]];
+  const steps = [];
+  if (preg !== 'no') { steps.push('Take a home pregnancy test.'); steps.push("If it is negative and the period still hasn't come, test again in a few days."); }
+  steps.push('When the period starts, log it on Today.');
+  if (signs.length) steps.push('Book a doctor\'s appointment about the other signs.');
+  return { reasons, other, steps, doctor: LATE_DOCTOR, urgent: [LATE_URGENT.today, LATE_URGENT.now], seeDoctorNow: signs.length > 0 };
 }
