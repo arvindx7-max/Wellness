@@ -212,6 +212,7 @@ for (const eng of want) {
     const c4 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c4.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c4.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
+    const seen = []; q.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') seen.push(m.text().slice(0, 160)); }); q.on('requestfailed', (r) => seen.push(`request failed ${r.url().slice(-40)}`)); q.on('worker', () => seen.push('worker started'));
     await q.goto(BASE); await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }); await q.click('[data-act=import-start]');
     const accept = await q.getAttribute('input[data-act=import-pick]', 'accept');
     ok(`${eng} v3.1: the file picker also offers PDF, CSV and text`, /pdf/.test(accept) && /csv/.test(accept) && /txt/.test(accept) && /json/.test(accept), accept);
@@ -239,7 +240,8 @@ for (const eng of want) {
     await q.click('[data-tab=settings]');
     ok(`${eng} v3.1: Settings import also offers PDF and has a Paste dates button`, /pdf/.test(await q.getAttribute('input[data-act=import-json]', 'accept')) && (await q.isVisible('[data-act=paste-open]')));
     await q.setInputFiles('input[data-act=import-json]', upload('report.pdf', 'application/pdf', pdfBytes(['Cycle report', 'Period history', '29 Jun 2026 - 02 Jul 2026', '25 May 2026 - 29 May 2026', '25 Jun 2026', 'Ovulation 12 Jul 2026'])));
-    ok(`${eng} v3.1: a PDF is read on the device`, await q.waitForSelector('#sheet .irow', { timeout: 30000 }).then(() => true, () => false));
+    const pdfRead = await q.waitForSelector('#sheet .irow', { timeout: 30000 }).then(() => true, () => false);
+    ok(`${eng} v3.1: a PDF is read on the device`, pdfRead, `toast: ${await toastText(q)} | console: ${seen.slice(-6).join(' | ')}`);
     ok(`${eng} v3.1: PDF rows are found in order`, (await rowsOf(q, '#sheet')).join() === '2026-05-25>2026-05-29,2026-06-25>,2026-06-29>2026-07-02', (await rowsOf(q, '#sheet')).join());
     await q.click('#sheet [data-act=review-continue]');
     await q.waitForSelector('#sheet [data-act=import-confirm]');
