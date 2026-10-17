@@ -106,6 +106,22 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
     cyclesOut.push(windowFor(start, addDays(start, cycleLen), spread, k));
   }
   const cur = cyclesOut[0];
+  // v4 (D4): the first Positive or Peak ovulation test of this cycle sharpens this cycle only. Ovulation is likely
+  // 1-2 days after it. The fertile days never start later than the calendar estimate; they end 3 days after the test.
+  const anchor = firstPositiveTest(days, last.start, today);
+  if (anchor) {
+    cur.ovulation = { likely: addDays(anchor, 1), early: addDays(anchor, 1), late: addDays(anchor, 2) };
+    const s0 = addDays(anchor, -4);
+    cur.possible = [diff(s0, cur.possible[0]) < 0 ? (diff(s0, cur.start) < 0 ? cur.start : s0) : cur.possible[0], addDays(anchor, 3)];
+    cur.peak = [addDays(anchor, -1), addDays(anchor, 2)];
+    cur.testAnchor = anchor;
+  }
+  // v4 (D10): a current cycle marked as pregnancy pauses all predictions and late alerts
+  if (last.excluded && last.excludeReason === 'Pregnancy') {
+    return { empty: false, paused: true, today, cycleLen, spread, periodLen, confidence: used.length >= CONST.MEDIUM_FROM ? 'Medium' : 'Low', usedCycles: used.length, usedDefault,
+      lastStart: last.start, lastPeriod: last, cycles: [], notes: [],
+      state: { id: 'pregnancy', label: 'Pregnancy', cycleDay: diff(today, last.start) + 1, daysToNext: null } };
+  }
   const confidence = used.length >= CONST.MEDIUM_FROM ? 'Medium' : 'Low';
   return {
     empty: false, today, cycleLen, spread, periodLen, confidence, usedCycles: used.length, usedDefault,
@@ -132,6 +148,12 @@ function windowFor(start, nextStart, s, k) {
 }
 
 const within = (d, [a, b]) => diff(d, a) >= 0 && diff(b, d) >= 0;
+export const POSITIVE = ['pos', 'peak'];
+export function firstPositiveTest(days, from, to) {
+  if (!days) return null;
+  return Object.keys(days).filter((d) => isDate(d) && diff(d, from) >= 0 && diff(to, d) >= 0)
+    .filter((d) => Array.isArray(days[d].ovu) && days[d].ovu.some((t) => POSITIVE.includes(t.r))).sort()[0] || null;
+}
 
 // 3.9: exactly one state per day.
 function stateOn(today, { last, periodLen, cur, spread, days }) {
@@ -169,7 +191,8 @@ function notesFor(cyc, cur, today, spread, lastStart) {
 
 // What a calendar day shows (FR-07, FR-08). Logged facts win over predictions.
 export function dayInfo(date, pred, periods, days) {
-  const info = { date, logged: false, flow: (days && days[date] && days[date].flow) || null };
+  const dd = (days && days[date]) || {};
+  const info = { date, logged: false, flow: dd.flow || null, test: Array.isArray(dd.ovu) && dd.ovu.length ? (dd.ovu.some((t) => POSITIVE.includes(t.r)) ? 'pos' : 'neg') : null, sex: dd.sex && dd.sex.kind && dd.sex.kind !== 'none' ? dd.sex.kind : null };
   for (const p of livePeriods(periods)) {
     const end = p.end && isDate(p.end) ? p.end : (pred.empty ? p.start : (p.id === pred.lastPeriod.id ? periodEnd(p, pred.periodLen, days || {}) : p.start));
     if (within(date, [p.start, end])) { info.logged = true; info.periodId = p.id; info.periodOpen = !p.end; break; }

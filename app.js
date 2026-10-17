@@ -347,6 +347,7 @@ function todayView() {
       <button class="btn wide" data-act="add-past">Add a past period</button></section>`;
   }
   const st = p.state;
+  if (p.paused) return pregnancyView(p, t);
   const wording = !!S.data.settings.wording;
   let sub;
   if (st.id === 'late' && st.stale) sub = `No period logged since ${fmt(st.lastStart)}`;
@@ -367,6 +368,7 @@ function todayView() {
   const L = look();
   return `${heroView(p, heroBtn, t)}
   ${flagCards()}
+  ${st.id === 'late' ? `<button class="card late-card" data-act="late-check"><span><strong>Period ${st.stale ? 'not logged for a long time' : `${plural(st.daysLate, 'day')} late`}</strong><span class="fine">Check what could be behind it</span></span><span aria-hidden="true">›</span></button>` : ''}
   ${L.companion !== 'off' && !L.noteSeen ? `<section class="note companion-note"><p>${h(TH.COMPANION_CAPTION)}</p><button class="btn small" data-act="note-seen">Got it</button></section>` : ''}
   <div class="today-grid">
     <div class="col">
@@ -386,6 +388,13 @@ function todayView() {
       <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
     </div>
   </div>`;
+}
+// v4 (D10): the current cycle is marked as pregnancy: no predictions, no late alerts
+function pregnancyView(p, t) {
+  return `<section class="hero" aria-label="Today at a glance"><div class="top"><h1>Today · ${weekday(t)}, ${fmt(t, true)}</h1>${syncPill()}</div>
+    <div class="state">Pregnancy</div><div class="lead">Predictions paused since</div><div class="big">${fmt(p.lastStart)}</div>
+    <div class="sub">No period forecasts or late alerts while this cycle is marked as pregnancy.</div>
+    <button class="hero-btn" data-act="edit-period" data-id="${p.lastPeriod.id}">End pregnancy mode</button></section>`;
 }
 // U2: one big readout in the header, with the cycle-aware companion
 function heroView(p, btn, t) {
@@ -446,9 +455,12 @@ function flagCards() {
     ${f.src ? `<p class="fine">Source: <a href="${T.SRC[f.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[f.src].name)}</a></p>` : ''}
     <button class="btn small" data-act="ack" data-id="${h(f.id)}">I have read this</button></section>`).join('');
 }
+// G4-10: with symptoms and moods both hidden, the check-in is just a note (bleeding safety questions stay)
+const noteOnly = () => hidden('symptoms') && hidden('moods');
 function checkinCard(date) {
   const ci = S.data.checkins[date];
   const recs = ci ? recsFor(ci, phaseOn(date)) : [];
+  if (!ci && noteOnly()) return `<section class="card checkin"><h2>Today's note</h2><button class="btn primary" data-act="checkin" data-date="${date}">Add note</button></section>`;
   if (!ci) return `<section class="card checkin"><h2>How are you today?</h2><p class="fine">A few quick questions for this part of your cycle. Takes under 30 seconds.</p><button class="btn primary" data-act="checkin" data-date="${date}">Start check-in</button></section>`;
   const logged = Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`);
   return `<section class="card checkin"><h2>Today's check-in</h2><p class="fine">${logged.length ? h(logged.join(', ')) : 'No symptoms logged.'}</p>
@@ -492,7 +504,7 @@ function foodCard(k, label, selected, now, diet) {
 
 // B2 item 7: mid-cycle, preview what comes next
 function comingUp() {
-  const p = S.pred; if (!p || p.empty) return '';
+  const p = S.pred; if (!p || p.empty || p.paused) return '';
   const lutealStart = addDays(p.possible[1], 1); const n = diff(lutealStart, today());
   const when = n > 0 ? `in about ${plural(n, 'day')}` : 'soon';
   return `<div class="next"><h3>Coming up ${when}: before your period</h3><p class="fine">${h(T.FOOD.luteal.title)}. ${h(T.FOOD.luteal.why)}</p>
@@ -514,9 +526,9 @@ function checkinSheet(date) {
   return `<h2>${h(q.title)}: ${date === today() ? 'today' : fmt(date)}</h2>
   <form class="stack checkin-form" data-form="checkin" data-date="${date}">
     ${q.ask.map((k) => asks[k]).join('')}
-    ${q.symptoms.map(scale).join('')}
-    <fieldset class="q"><legend>Mood</legend>${T.MOOD_GOOD.map((m) => `<label class="pick"><input type="checkbox" name="g_${m.code}" ${sy[m.code] ? 'checked' : ''}><span>${m.label}</span></label>`).join('')}</fieldset>
-    <details ${extraOpen ? 'open' : ''}><summary>Log another symptom</summary>${others.map((s) => scale(s.code)).join('')}</details>
+    ${hidden('symptoms') ? '' : q.symptoms.map(scale).join('')}
+    ${hidden('moods') ? '' : `<fieldset class="q"><legend>Mood</legend>${T.MOOD_GOOD.map((m) => `<label class="pick"><input type="checkbox" name="g_${m.code}" ${sy[m.code] ? 'checked' : ''}><span>${m.label}</span></label>`).join('')}</fieldset>`}
+    ${hidden('symptoms') ? '' : `<details ${extraOpen ? 'open' : ''}><summary>Log another symptom</summary>${others.map((s) => scale(s.code)).join('')}</details>`}
     <label>Pain relief or medicine taken<input type="text" name="meds" maxlength="80" value="${h(ci.meds || '')}" placeholder="Optional"></label>
     <label>Notes<textarea name="note" rows="2" maxlength="500" placeholder="Optional">${h(ci.note || '')}</textarea></label>
     <p class="fine">Severity: mild = noticeable, moderate = disrupts the day, severe = stops normal activities.</p>
@@ -568,20 +580,25 @@ function weekStrip(p) {
 function dayClass(i) {
   const c = [];
   if (i.logged) c.push('m-period'); else if (i.predictedPeriod) c.push('m-pred');
-  if (!i.logged && i.fertile) c.push(i.fertile === 'peak' ? 'm-peak' : 'm-possible');
+  if (!i.logged && i.fertile && !hidden('predictions')) c.push(i.fertile === 'peak' ? 'm-peak' : 'm-possible');
   if (i.horizon > 1) c.push('far');
   return c.join(' ');
 }
 function daySymbol(i) {
-  if (i.ovulation && !i.logged) return '<span class="s-ovu" title="Likely ovulation">●</span>';
+  let out = '';
+  if (i.test === 'pos' && !hidden('tests')) out += '<span class="s-test" title="Positive ovulation test">▲</span>';
+  if (i.sex && !hidden('sex')) out += '<span class="s-sex" title="Sex logged">○</span>';
+  if (out) return out;
+  if (i.ovulation && !i.logged && !hidden('predictions')) return '<span class="s-ovu" title="Likely ovulation">●</span>';
   if (i.flow && i.flow !== 'none' && !i.logged) return '<span class="s-flow" title="Bleeding logged">◆</span>';
   return '';
 }
 function describe(i) {
   const parts = [];
   if (i.logged) parts.push('period'); else if (i.predictedPeriod) parts.push('predicted period');
-  if (i.fertile === 'peak') parts.push('peak fertile day'); else if (i.fertile) parts.push('possible fertile day');
-  if (i.ovulation) parts.push('likely ovulation');
+  if (!hidden('predictions')) { if (i.fertile === 'peak') parts.push('peak fertile day'); else if (i.fertile) parts.push('possible fertile day'); if (i.ovulation) parts.push('likely ovulation'); }
+  if (i.test && !hidden('tests')) parts.push(i.test === 'pos' ? 'positive ovulation test' : 'ovulation test logged');
+  if (i.sex && !hidden('sex')) parts.push('sex logged');
   if (i.flow && i.flow !== 'none') parts.push(`${i.flow} bleeding logged`);
   return parts.join(', ') || 'no marks';
 }
@@ -607,6 +624,7 @@ function calendarView() {
     <span><i class="lg m-period"></i>Period</span><span><i class="lg m-pred"></i>Predicted period</span>
     <span><i class="lg m-peak"></i>${wording ? 'High chance of pregnancy' : 'Peak fertile days'}</span><span><i class="lg m-possible"></i>${wording ? 'Higher chance of pregnancy' : 'Possible fertile days'}</span>
     <span><b class="s-ovu">●</b>Likely ovulation</span><span><b class="s-flow">◆</b>Bleeding logged</span>
+    ${hidden('tests') ? '' : '<span><b class="s-test">▲</b>Positive test</span>'}${hidden('sex') ? '' : '<span><b class="s-sex">○</b>Sex logged</span>'}
   </section>
   <p class="fine">${wording ? WARNING : 'All future days are estimates. Paler marks are further ahead and less certain.'}</p>`;
 }
@@ -746,6 +764,7 @@ function sheetBody() {
     }
     return `<h2>${weekday(d)}, ${fmt(d, true)}</h2><p class="fine">${h(describe(info)).replace(/^./, (c) => c.toUpperCase())}.${future ? ' Future days show estimates only.' : ''}</p>
       ${future ? '' : `<h3>Bleeding</h3><div class="chips">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" data-act="flow" data-date="${d}" data-flow="${v}">${l}</button>`).join('')}</div>`}
+      ${future ? '' : testSection(d)}${future ? '' : sexSection(d)}
       ${future ? '' : daySymptoms(d)}
       <div class="stack-btns">${acts}<button class="btn" data-act="close-sheet">Close</button></div>`;
   }
@@ -765,7 +784,7 @@ function sheetBody() {
         <label>First day of bleeding<input type="date" name="start" max="${t}" required value="${h(p.start)}" autofocus></label>
         <label>Last day of bleeding<input type="date" name="end" max="${t}" value="${h(p.end || '')}"><span class="fine">Leave empty if it hasn't ended or you don't remember.</span></label>
         ${s.name === 'edit' ? `<label class="choice"><input type="checkbox" name="excluded" ${p.excluded ? 'checked' : ''}> Leave this cycle out of predictions</label>
-        <label>Reason<select name="excludeReason">${['', 'Illness', 'Travel', 'Stopped hormonal contraception', 'Missed logging', 'Other'].map((r) => `<option ${p.excludeReason === r ? 'selected' : ''} value="${r}">${r || 'None'}</option>`).join('')}</select></label>` : ''}
+        <label>Reason<select name="excludeReason">${['', 'Pregnancy', 'Illness', 'Travel', 'Stopped hormonal contraception', 'Missed logging', 'Other'].map((r) => `<option ${p.excludeReason === r ? 'selected' : ''} value="${r}">${r || 'None'}</option>`).join('')}</select></label>` : ''}
         <button class="btn primary">Save</button>
       </form>
       ${s.name === 'edit' ? `<button class="btn danger wide" data-act="delete-period" data-id="${p.id}">Delete this period</button>` : ''}
@@ -795,11 +814,31 @@ function sheetBody() {
   }
   return '';
 }
+// v4 (R7a): ovulation tests, several a day, each with its time and a remove button (I2)
+const TESTS = [['neg', 'Negative'], ['pos', 'Positive'], ['peak', 'Peak']];
+const anyLogged = (f) => Object.values(S.data.days).some((x) => x && (Array.isArray(x[f]) ? x[f].length : x[f] && x[f].kind && x[f].kind !== 'none'));
+const newBadge = (f) => (anyLogged(f) ? '' : ' <span class="badge-new">New</span>');
+function testSection(d) {
+  if (hidden('tests')) return '';
+  const list = ((S.data.days[d] || {}).ovu || []);
+  const label = (r) => (TESTS.find((x) => x[0] === r) || [r, r])[1];
+  return `<h3>Ovulation test${newBadge('ovu')}</h3><div class="chips">${TESTS.map(([v, l]) => `<button class="chip" data-act="ovu-add" data-date="${d}" data-r="${v}">${l}</button>`).join('')}</div>
+    ${list.map((x, i) => `<div class="logrow"><span>${h(x.at || '')} · ${label(x.r)}</span><button class="icon-x" data-act="ovu-del" data-date="${d}" data-i="${i}" aria-label="Remove this test">✕</button></div>`).join('')}
+    ${list.some((x) => x.r !== 'neg') ? '<p class="fine">Ovulation usually follows within 1–2 days. An estimate, never a "safe" day.</p>' : ''}`;
+}
+// v4 (R7b): sex life, one entry a day with an optional note; can be hidden completely
+const SEX = [['none', 'None'], ['protected', 'Protected'], ['unprotected', 'Unprotected']];
+function sexSection(d) {
+  if (hidden('sex')) return '';
+  const x = (S.data.days[d] || {}).sex || {}; const k = x.kind || 'none';
+  return `<h3>Sex life${newBadge('sex')}</h3><div class="chips">${SEX.map(([v, l]) => `<button class="chip ${k === v ? 'on' : ''}" aria-pressed="${k === v}" data-act="sex" data-date="${d}" data-kind="${v}">${l}</button>`).join('')}</div>
+    ${k !== 'none' ? `<label class="stack fine">Note (optional)<input type="text" maxlength="200" value="${h(x.note || '')}" data-act="sex-note" data-date="${d}"></label>` : ''}`;
+}
 function daySymptoms(d) {
   const ci = S.data.checkins[d];
   const logged = ci ? Object.entries(ci.symptoms || {}).filter(([, s]) => s).map(([c, s]) => T.MOOD_GOOD.some((m) => m.code === c) ? T.label(c) : `${T.label(c)} (${T.SEVERITY[s].toLowerCase()})`) : [];
   return `<h3>Check-in</h3><p class="fine">${ci ? (logged.length ? h(logged.join(', ')) : 'No symptoms logged.') + (ci.note ? ` Note: ${h(ci.note)}` : '') : 'No check-in for this day.'}</p>
-    <button class="btn small" data-act="checkin" data-date="${d}">${ci ? 'Edit check-in' : 'Add a check-in for this day'}</button>`;
+    <button class="btn small" data-act="checkin" data-date="${d}">${noteOnly() ? (ci ? 'Edit note' : 'Add note') : ci ? 'Edit check-in' : 'Add a check-in for this day'}</button>`;
 }
 function confirmSheet(title, text, yes, fn, danger = false) { S.confirmFn = fn; openSheet('confirm', { title, text, yes, danger }); }
 
@@ -874,6 +913,9 @@ document.addEventListener('click', async (e) => {
     else if (a === 'faceid-setup') await faceIdSetup();
     else if (a === 'unlock-faceid') await unlockFaceId();
     else if (a === 'close-sheet') closeSheet();
+    else if (a === 'ovu-add') { const dd = S.data.days[d] || {}; const now = new Date(); setDay(d, 'ovu', [...(dd.ovu || []), { r: b.dataset.r, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` }]); await persist(); render(); }
+    else if (a === 'ovu-del') { const list = [...((S.data.days[d] || {}).ovu || [])]; list.splice(+b.dataset.i, 1); setDay(d, 'ovu', list); await persist(); render(); }
+    else if (a === 'sex') { const prev = (S.data.days[d] || {}).sex || {}; setDay(d, 'sex', b.dataset.kind === 'none' ? { kind: 'none' } : { ...prev, kind: b.dataset.kind }); await persist(); render(); }
     else if (a === 'period-start') await startPeriod(d);
     else if (a === 'period-end') await endPeriod(d);
     else if (a === 'period-end-earlier') openSheet('period-end-earlier');
@@ -943,6 +985,7 @@ function reviewContinue() {
 }
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.dataset.act === 'sex-note') { const prev = (S.data.days[el.dataset.date] || {}).sex || {}; setDay(el.dataset.date, 'sex', { ...prev, note: el.value.slice(0, 200) }); await persist(); return; }
   if (el.dataset.act === 'row-tick' && S.imp && S.imp.rows) { S.imp.rows[+el.dataset.i].off = !el.checked; el.closest('.irow').classList.toggle('off', !el.checked); return; }
   if (el.dataset.act === 'import-replace' && S.imp) { S.imp.replace = el.checked; return; }
   if (el.dataset.act === 'wording') {

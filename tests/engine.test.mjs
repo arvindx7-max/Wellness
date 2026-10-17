@@ -170,5 +170,28 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('B11: a few days late is still "late by N days"', st2.id === 'late' && !st2.stale, true);
 }
 
+// v4 (D4): a positive ovulation test sharpens the current cycle only; the start never moves later
+{
+  const ps = P('2026-07-03', '2026-08-02', '2026-09-01');
+  const a = predict(ps, {}, '2026-09-14', {});
+  const b = predict(ps, {}, '2026-09-14', { '2026-09-13': { ovu: [{ r: 'pos', at: '08:30' }] }, '2026-09-14': { ovu: [{ r: 'peak', at: '08:00' }] } });
+  eq('D4: likely ovulation is the day after the first positive test', b.ovulation.likely, '2026-09-14');
+  eq('D4: fertile days never start later than the calendar estimate', b.possible[0] <= a.possible[0], true);
+  eq('D4: fertile days end 3 days after the test', b.possible[1], '2026-09-16');
+  eq('D4: the first positive test is the anchor (a later Peak does not slide it)', b.cycles[0].testAnchor, '2026-09-13');
+  eq('D4: later cycles are unchanged', b.cycles[1].possible.join(), a.cycles[1].possible.join());
+  const c = predict(ps, {}, '2026-09-14', { '2026-09-13': { ovu: [{ r: 'neg' }] } });
+  eq('D4: a negative test changes nothing', c.possible.join(), a.possible.join());
+  const d = predict(ps, {}, '2026-09-14', { '2026-08-20': { ovu: [{ r: 'pos' }] } });
+  eq('D4: a test from an earlier cycle is ignored', d.possible.join(), a.possible.join());
+}
+// v4 (D10): a current cycle marked as pregnancy pauses predictions
+{
+  const ps = P('2026-07-03', '2026-08-02', '2026-09-01'); ps[2].excluded = true; ps[2].excludeReason = 'Pregnancy';
+  const r = predict(ps, {}, '2026-10-30', {});
+  eq('D10: pregnancy state instead of late', r.state.id, 'pregnancy');
+  eq('D10: no forecasts while paused', r.cycles.length + r.notes.length, 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
