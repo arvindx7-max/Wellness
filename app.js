@@ -1044,7 +1044,11 @@ function lockApp() { S.key = null; S.data = null; S.pred = null; S.sheet = null;
 async function faceIdSetup() {
   busy(true, 'Waiting for Face ID');
   try { S.meta.lock = await Lock.setup(S.key); await kvSet('meta', S.meta); busy(false); toast('Face ID unlock is on'); S.view = 'app'; render(); }
-  catch (e) { busy(false); toast(e.message); }
+  catch (e) {
+    busy(false); toast(e.message);
+    // I4: the passkey exists but the browser wanted a tap first: the next tap anywhere finishes the setup (once)
+    if (e.retryOnTap && S.view === 'faceid') document.addEventListener('click', (ev) => { if (!ev.target.closest('[data-act=faceid-skip]')) faceIdSetup(); }, { once: true });
+  }
 }
 async function unlockFaceId() {
   busy(true, 'Waiting for Face ID');
@@ -1185,4 +1189,6 @@ function csv() {
 })();
 for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+// I3: a redraw held back while she was typing is done once the field loses focus
+document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
 window.__cycle = { busyEditing, softRender, S, predict, VERSION, render };

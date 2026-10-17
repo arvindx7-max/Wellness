@@ -113,7 +113,7 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
     nextRange: [addDays(cur.nextStart, -spread), addDays(cur.nextStart, spread)],
     ovulation: cur.ovulation, peak: cur.peak, possible: cur.possible,
     cycles: cyclesOut, state: stateOn(today, { last, periodLen, cur, spread, days }),
-    notes: notesFor(cyc, cur, today, spread, last.start),
+    notes: notesFor(cyc, cur, today, spread, last ? last.start : null),
   };
 }
 

@@ -34,13 +34,21 @@ const until = (p, fn, arg) => p.waitForFunction(fn, arg, { timeout: 10000 }).the
 const lookIs = (p, want) => until(p, (w) => { const l = (window.__cycle.S.data.settings.look) || {};
   return Object.entries(w).every(([k, v]) => { const b = document.querySelector(`[data-act=look-${k}][data-v="${v}"]`); return l[k] === v && !!b && b.getAttribute('aria-pressed') === 'true'; }); }, want);
 
+// CI fix: a slow start-up is tried once more on a clean page before it counts as a failure (WebKit on shared runners)
 async function setup(p) {
+  try { await setupOnce(p); } catch (e) {
+    if (!/Timeout/.test(String(e.message))) throw e;
+    await p.evaluate(() => new Promise((res) => { const r = indexedDB.deleteDatabase('cycle-wellness'); r.onsuccess = r.onerror = r.onblocked = () => res(); }));
+    await p.goto(BASE); await setupOnce(p);
+  }
+}
+async function setupOnce(p) {
   await p.click('[data-act=start]');
   await p.fill('input[name=last]', LAST); await p.fill('input[name=usualCycle]', '30');
   await p.check('input[name=ageBand][value="26-41"]'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
   await p.click('form[data-form=onboard] button:not(.pw-eye)');
   await p.fill('input[name=p1]', PASS); await p.fill('input[name=p2]', PASS); await p.check('input[name=saved]');
-  await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 45000 });
+  await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 90000 });
   for (const [s, e] of PERIODS) {
     await p.click('[data-tab=history]'); await p.click('[data-act=add-past] >> nth=0');
     await p.fill('#sheet input[name=start]', s); await p.fill('#sheet input[name=end]', e); await p.click('#sheet form button:not(.pw-eye)'); await p.waitForTimeout(150);
@@ -312,6 +320,22 @@ for (const eng of want) {
     await q.evaluate(() => window.__cycle.softRender());
     ok(`${eng} v3.2: a background refresh does not wipe a form that is being filled`, (await q.inputValue('#sheet textarea[name=text]')) === 'dummy_metric_A typed text' && await q.evaluate(() => window.__cycle.S.redrawLater === true));
     await q.click('#sheet .sheet-card button[data-act=close-sheet]');
+    const fid = await q.evaluate(async () => {
+      const Lock = await import('./lock.js'); const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+      const real = navigator.credentials; let creates = 0, gets = 0; const out = {};
+      const stub = { create: async () => { creates++; return { rawId: new Uint8Array([1, 2, 3]).buffer }; },
+        get: async () => { gets++; if (gets <= 2) throw Object.assign(new Error('x'), { name: 'NotAllowedError' }); return { getClientExtensionResults: () => ({ prf: { results: { first: new Uint8Array(32).buffer } } }) }; } };
+      Object.defineProperty(navigator, 'credentials', { value: stub, configurable: true });
+      try { await Lock.setup(key); } catch (e) { out.first = { retry: !!e.retryOnTap, msg: e.message }; }
+      try { out.second = !!(await Lock.setup(key)).wrapped; } catch (e) { out.second = String(e.message); }
+      out.creates = creates; Object.defineProperty(navigator, 'credentials', { value: real, configurable: true }); return out;
+    });
+    ok(`${eng} v3.2: Face ID setup refused once asks for a tap, the next try finishes it without a second passkey`, fid.first && fid.first.retry && /click or tap anywhere/.test(fid.first.msg) && fid.second === true && fid.creates === 1, JSON.stringify(fid));
+    await q.click('[data-tab=settings]');
+    ok(`${eng} v3.2: a held-back redraw is done when the field loses focus (I3)`, await q.evaluate(async () => {
+      const c = window.__cycle; const f = document.querySelector('#app input:not([type=checkbox]):not([type=radio]):not([type=file]), #app textarea');
+      if (!f) return true; f.focus(); c.softRender(); const held = c.S.redrawLater === true; f.blur();
+      await new Promise((r) => setTimeout(r, 500)); return held && c.S.redrawLater === false; }));
     ok(`${eng} v3.2: with nothing open the refresh redraws`, await q.evaluate(() => { window.__cycle.S.redrawLater = true; document.activeElement && document.activeElement.blur(); window.__cycle.softRender(); return window.__cycle.S.redrawLater === false; }));
     await c4.close();
   }

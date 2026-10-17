@@ -28,11 +28,13 @@ async function prfFor(credId, prfSalt) {
 async function whenFocused() {
   for (let i = 0; i < 40 && typeof document !== 'undefined' && document.hasFocus && !document.hasFocus(); i++) await new Promise((r) => setTimeout(r, 100));
 }
+// I4 (v3.2): when the passkey was made but the second step was refused, it is kept here so that the next tap finishes the setup without a second prompt for a new passkey
+let pending = null;
 export async function setup(dataKey) {
-  const prfSalt = b64(crypto.getRandomValues(new Uint8Array(32)));
-  const hkdfSalt = b64(crypto.getRandomValues(new Uint8Array(16)));
-  let cred;
-  try {
+  const prfSalt = pending ? pending.prfSalt : b64(crypto.getRandomValues(new Uint8Array(32)));
+  const hkdfSalt = pending ? pending.hkdfSalt : b64(crypto.getRandomValues(new Uint8Array(16)));
+  let cred = pending ? { rawId: pending.rawId } : null;
+  if (!cred) try {
     cred = await navigator.credentials.create({ publicKey: {
       rp: { name: 'Cycle' },
       user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'Cycle app lock', displayName: 'Cycle app lock' },
@@ -43,16 +45,18 @@ export async function setup(dataKey) {
     } });
   } catch (e) { throw new Error(e.name === 'NotAllowedError' ? 'Face ID setup was cancelled.' : `Face ID setup failed (${e.name}).`); }
   const credId = b64(cred.rawId);
+  pending = { rawId: cred.rawId, prfSalt, hkdfSalt };
   // B15: on a Mac the page can lose focus while the system sheet closes; wait for focus, and try once more if the browser says so
   await whenFocused();
   let prf;
   try { prf = await prfFor(credId, prfSalt); }
   catch (e) {
-    if (e && e.code === 'noprf') throw e;
+    if (e && e.code === 'noprf') { pending = null; throw e; }
     await new Promise((r) => setTimeout(r, 600)); await whenFocused();
-    try { prf = await prfFor(credId, prfSalt); } catch (e2) { if (e2 && e2.code === 'noprf') throw e2; throw new Error(e2 && e2.name === 'NotAllowedError' ? 'Face ID / Touch ID setup was not finished. Click the page once, then try again.' : `Face ID setup failed (${(e2 && (e2.name || e2.message)) || 'error'}).`); }
+    try { prf = await prfFor(credId, prfSalt); } catch (e2) { if (e2 && e2.code === 'noprf') { pending = null; throw e2; } throw Object.assign(new Error(e2 && e2.name === 'NotAllowedError' ? 'Almost done: click or tap anywhere on the page to finish Face ID / Touch ID setup.' : `Face ID setup failed (${(e2 && (e2.name || e2.message)) || 'error'}).`), { retryOnTap: !!e2 && e2.name === 'NotAllowedError' }); }
   }
   const wrap = await wrapKeyFrom(prf, hkdfSalt);
+  pending = null;
   return { credId, prfSalt, hkdfSalt, wrapped: await seal({ raw: await exportRaw(dataKey) }, wrap), since: new Date().toISOString() };
 }
 export async function unlock(meta) {
