@@ -102,6 +102,20 @@ export function mergeDay(a, b) {
   out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
   return out;
 }
+// I5-1 (v4): settings sync part by part: look, display and hide each carry their own time, so a change to one
+// part on one device cannot undo a change to another part made on the other device
+const SETTING_PARTS = ['look', 'display', 'hide'];
+export function mergeSettings(a = {}, b = {}) {
+  const newer = (b.updatedAt || 0) > (a.updatedAt || 0) ? b : a;
+  const out = { ...(newer === a ? b : a), ...newer };
+  for (const k of SETTING_PARTS) {
+    const x = a[k], y = b[k];
+    if (x && y) out[k] = ((y.updatedAt || 0) > (x.updatedAt || 0)) ? y : ((x.updatedAt || 0) > (y.updatedAt || 0)) ? x : newer[k];
+    else if (x || y) out[k] = x || y;
+  }
+  out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
+  return out;
+}
 export function merge(local, remote) {
   if (!remote) return local;
   const newer = (a, b) => ((b && b.updatedAt) || 0) > ((a && a.updatedAt) || 0) ? b : a;
@@ -111,6 +125,6 @@ export function merge(local, remote) {
   for (const [d, v] of Object.entries(remote.days || {})) days[d] = mergeDay(days[d], v);
   const perKey = (a = {}, b = {}) => { const o = { ...a }; for (const [k, v] of Object.entries(b)) o[k] = o[k] ? newer(o[k], v) : v; return o; };
   return { ...remote, ...local, app: 'cycle', v: 1, schema: Math.max(SCHEMA, local.schema || 0, remote.schema || 0),
-    settings: newer(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
+    settings: mergeSettings(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
     checkins: perKey(local.checkins, remote.checkins), acks: perKey(local.acks, remote.acks) };
 }

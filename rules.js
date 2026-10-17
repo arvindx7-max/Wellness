@@ -99,7 +99,7 @@ export function lateResult(answers = {}, age = null) {
   const reasons = [];
   if (preg !== 'no') reasons.push({ code: 'preg', text: `Pregnancy is ${preg === 'yes' ? 'possible' : 'not ruled out'}. A home test works from the first day of a missed period.` });
   for (const [code, , text] of LATE_CHANGES) if (changes.includes(code)) reasons.push({ code, text });
-  if (signs.length) reasons.push({ code: 'signs', text: 'The other signs you chose can come with hormone conditions such as PMOS or thyroid problems. Worth checking with a doctor.' });
+  if (signs.length) reasons.push({ code: 'signs', text: 'The other signs you chose can come with hormone conditions such as PMOS (formerly called PCOS) or thyroid problems. Worth checking with a doctor.' });
   const other = age && age >= 40 ? [LATE_OTHER[0], ...LATE_OTHER.slice(1)] : [...LATE_OTHER.slice(1), LATE_OTHER[0]];
   const steps = [];
   if (preg !== 'no') { steps.push('Take a home pregnancy test.'); steps.push("If it is negative and the period still hasn't come, test again in a few days."); }

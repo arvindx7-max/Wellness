@@ -27,7 +27,9 @@ class Doc {
   table(cols, rows) { // cols: [[title, x]]
     this.need(30);
     cols.forEach(([t, x]) => this.text(M + x, this.y, t, 9, true, 0.25)); this.y -= 6; this.line(M, this.y, W - M, this.y, 0.8, 0.6); this.y -= 13;
-    for (const r of rows) { this.need(16); r.forEach((v, i) => this.text(M + cols[i][1], this.y, v, 9.5)); this.y -= 5; this.line(M, this.y, W - M, this.y, 0.3, 0.85); this.y -= 11; }
+    // G5-4: each cell is shortened to fit its column
+    const fit = (v, i) => { const max = (i + 1 < cols.length ? cols[i + 1][1] : W - 2 * M) - cols[i][1] - 6; let t = String(v); if (wid(t, 9.5) <= max) return t; while (t.length > 1 && wid(t + '...', 9.5) > max) t = t.slice(0, -1); return t.trimEnd() + '...'; };
+    for (const r of rows) { this.need(16); r.forEach((v, i) => this.text(M + cols[i][1], this.y, fit(v, i), 9.5)); this.y -= 5; this.line(M, this.y, W - M, this.y, 0.3, 0.85); this.y -= 11; }
   }
   bytes() {
     const objs = ['<< /Type /Catalog /Pages 2 0 R >>', null,

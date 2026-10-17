@@ -348,6 +348,20 @@ for (const eng of want) {
       if (!f) return true; f.focus(); c.softRender(); const held = c.S.redrawLater === true; f.blur();
       await new Promise((r) => setTimeout(r, 500)); return held && c.S.redrawLater === false; }));
     ok(`${eng} v3.2: with nothing open the refresh redraws`, await q.evaluate(() => { window.__cycle.S.redrawLater = true; document.activeElement && document.activeElement.blur(); window.__cycle.softRender(); return window.__cycle.S.redrawLater === false; }));
+    // G5-2/G5-3: saving a check-in with moods hidden keeps the hidden mood and fields the form does not know
+    const kept = await q.evaluate(async () => {
+      const c = window.__cycle, d = '2026-10-02';
+      c.S.data.checkins[d] = { symptoms: { calm: 1, cramps: 2 }, futureField: 'dummy_metric_A', updatedAt: 1 };
+      c.S.data.settings = { ...c.S.data.settings, hide: { ...(c.S.data.settings.hide || {}), moods: true, updatedAt: Date.now() } };
+      c.S.sheet = { name: 'checkin', date: d }; c.render();
+      await new Promise((r) => setTimeout(r, 300));
+      const f = document.querySelector('#sheet form[data-form=checkin]'); if (!f) return 'no form';
+      f.requestSubmit(); await new Promise((r) => setTimeout(r, 500));
+      const ci = c.S.data.checkins[d];
+      c.S.data.settings = { ...c.S.data.settings, hide: { ...c.S.data.settings.hide, moods: false, updatedAt: Date.now() } };
+      return JSON.stringify(ci);
+    });
+    ok(`${eng} v4: a check-in saved with moods hidden keeps the hidden mood and unknown fields (G5-2, G5-3)`, /"calm":1/.test(kept) && /futureField/.test(kept), kept);
     await c4.close();
 
     // ---- v4: ovulation tests, sex life, hide and display options, report, late check, history, pregnancy, B16, word budget ----

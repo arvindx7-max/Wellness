@@ -87,7 +87,7 @@ function look() {
   return { ...TH.LOOK_DEFAULT, ...l, cards: { ...TH.LOOK_DEFAULT.cards, ...(l.cards || {}) } };
 }
 async function setLook(patch) {
-  S.data.settings = { ...S.data.settings, look: { ...look(), ...patch }, updatedAt: Date.now() };
+  const now = Date.now(); S.data.settings = { ...S.data.settings, look: { ...look(), ...patch, updatedAt: now }, updatedAt: now };
   await persist(); render();
 }
 const sysDark = () => !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -661,7 +661,8 @@ function historyView() {
     if (preg) bar = seg(len, 'g');
     else if (c) {
       const ov = c.length - CONST.D_LIKELY; const late = Math.max(0, c.length - expected);
-      bar = seg(plen, 'p') + seg(ov - 6 - plen, 'x') + seg(5, 'f') + seg(1, 'o', true) + seg(1, 'f') + seg(c.length - ov - 1 - late, 'x') + (late ? seg(late, 'l') : '');
+      const gap = Math.max(0, ov - 6 - plen), fert = Math.max(0, ov - 1 - plen - gap); // G5-5: the parts always add up to the cycle length
+      bar = seg(plen, 'p') + seg(gap, 'x') + seg(fert, 'f') + seg(1, 'o', true) + seg(1, 'f') + seg(Math.max(0, c.length - ov - 1 - late), 'x') + (late ? seg(late, 'l') : '');
     } else bar = seg(Math.min(plen, len), 'p') + seg(Math.max(len - plen, 0), 'x') + seg(Math.max((p && !p.empty ? p.cycleLen : 30) - len, 0), 'e');
     const title = preg ? 'Pregnancy' : c ? plural(c.length, 'day') : `Day ${len} now`;
     const note = preg ? ' · left out of averages' : x.excluded ? ' · left out' : c && !c.valid ? ' · check this' : c && suspects.has(c.start) ? ' · possible missed period' : '';
@@ -890,7 +891,7 @@ function testSection(d) {
   const list = ((S.data.days[d] || {}).ovu || []);
   const label = (r) => (TESTS.find((x) => x[0] === r) || [r, r])[1];
   return `<h3>Ovulation test${newBadge('ovu')}</h3><div class="chips">${TESTS.map(([v, l]) => `<button class="chip" data-act="ovu-add" data-date="${d}" data-r="${v}">${l}</button>`).join('')}</div>
-    ${list.map((x, i) => `<div class="logrow"><span>${h(x.at || '')} · ${label(x.r)}</span><button class="icon-x" data-act="ovu-del" data-date="${d}" data-i="${i}" aria-label="Remove this test">✕</button></div>`).join('')}
+    ${list.map((x, i) => [x, i]).sort((u, v) => String(u[0].at || '').localeCompare(String(v[0].at || ''))).map(([x, i]) => `<div class="logrow"><span>${h(x.at || '')} · ${label(x.r)}</span><button class="icon-x" data-act="ovu-del" data-date="${d}" data-i="${i}" aria-label="Remove this test">✕</button></div>`).join('')}
     ${list.some((x) => x.r !== 'neg') ? '<p class="fine">Ovulation usually follows within 1–2 days. An estimate, never a "safe" day.</p>' : ''}`;
 }
 // v4 (R7b): sex life, one entry a day with an optional note; can be hidden completely
@@ -1010,7 +1011,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'close-sheet') closeSheet();
     else if (a === 'set-page') { S.setPage = b.dataset.v || null; S.guideOpen = null; render(); window.scrollTo(0, 0); }
     else if (a === 'guide') { S.tab = 'settings'; S.setPage = 'guide'; S.guideOpen = b.dataset.id; S.sheet = null; render(); const g = document.getElementById(`g-${b.dataset.id}`); if (g) g.scrollIntoView({ block: 'center' }); }
-    else if (a === 'disp-date' || a === 'disp-week') { const k = a === 'disp-date' ? 'dateFmt' : 'weekStart'; S.data.settings = { ...S.data.settings, display: { ...display(), [k]: b.dataset.v }, updatedAt: Date.now() }; await persist(); render(); }
+    else if (a === 'disp-date' || a === 'disp-week') { const k = a === 'disp-date' ? 'dateFmt' : 'weekStart'; S.data.settings = { ...S.data.settings, display: { ...display(), [k]: b.dataset.v, updatedAt: Date.now() }, updatedAt: Date.now() }; await persist(); render(); }
     else if (a === 'del-cat') confirmSheet(b.dataset.k === 'sex' ? 'Delete all sex-life data?' : 'Delete all ovulation tests?', 'Removed on this device and, with sync on, in your Google Drive vault. This cannot be undone.', 'Delete', async () => {
       for (const d0 of Object.keys(S.data.days)) if (S.data.days[d0][b.dataset.k] !== undefined) setDay(d0, b.dataset.k, b.dataset.k === 'sex' ? { kind: 'none' } : []);
       await persist(); closeSheet(); toast('Deleted');
@@ -1058,7 +1059,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'export-json') download(`cycle-backup-${today()}.json`, JSON.stringify(S.data, null, 1), 'application/json');
     else if (a === 'export-csv') download(`cycle-periods-${today()}.csv`, csv(), 'text/csv');
     else if (a === 'wipe') confirmSheet('Delete all data on this device?', 'Everything Cycle stores on this device is removed. Your Google Drive vault, if any, is not touched.', 'Delete everything', async () => {
-      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
+      await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, sheet: null, late: null, report: null, setPage: null, guideOpen: null, histFilter: null, imp: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render();
     }, true);
     else if (a === 'gsignin') await signIn('sync', S.meta && S.meta.cloud && S.meta.cloud.fileId ? '' : 'select_account');
     else if (a === 'gswitch') { S.cloud.existing = null; await signIn('sync', 'select_account'); }
@@ -1104,7 +1105,7 @@ function reviewContinue() {
 }
 document.addEventListener('change', async (e) => {
   const el = e.target;
-  if (el.dataset.act === 'hide-tog') { S.data.settings = { ...S.data.settings, hide: { ...(S.data.settings.hide || {}), [el.dataset.k]: !el.checked }, updatedAt: Date.now() }; await persist(); render(); return; }
+  if (el.dataset.act === 'hide-tog') { S.data.settings = { ...S.data.settings, hide: { ...(S.data.settings.hide || {}), [el.dataset.k]: !el.checked, updatedAt: Date.now() }, updatedAt: Date.now() }; await persist(); render(); return; }
   if (el.dataset.act === 'rep-tog') { S.report.on[el.dataset.k] = el.checked; return; }
   if (el.dataset.act === 'sex-note') { const prev = (S.data.days[el.dataset.date] || {}).sex || {}; setDay(el.dataset.date, 'sex', { ...prev, note: el.value.slice(0, 200) }); await persist(); return; }
   if (el.dataset.act === 'row-tick' && S.imp && S.imp.rows) { S.imp.rows[+el.dataset.i].off = !el.checked; el.closest('.irow').classList.toggle('off', !el.checked); return; }
@@ -1186,12 +1187,17 @@ document.addEventListener('submit', async (e) => {
       else S.data.periods.push({ id: uid(), start, end, updatedAt: Date.now() });
       await persist(); closeSheet(); toast('Period saved');
     } else if (kind === 'checkin') {
-      const date = f.dataset.date; const symptoms = {};
+      const date = f.dataset.date; const prev = S.data.checkins[date] || {};
+      // G5-2: entries this form does not show (a hidden category) are kept, never erased
+      const shown = new Set([...f.querySelectorAll('[name^=s_], [name^=g_]')].map((x) => x.name.slice(2)));
+      const symptoms = Object.fromEntries(Object.entries(prev.symptoms || {}).filter(([k]) => !shown.has(k)));
       for (const [k, v] of fd.entries()) {
         if (k.startsWith('s_') && Number(v) > 0) symptoms[k.slice(2)] = Number(v);
         if (k.startsWith('g_')) symptoms[k.slice(2)] = 1;
       }
-      const ci = { symptoms, updatedAt: Date.now() };
+      // G5-3: fields this form does not know are kept; the ones it edits are set again from the form
+      const ci = { ...prev, symptoms, updatedAt: Date.now() };
+      for (const k of ['change', 'discharge', 'clots', 'dizzy', 'sidepain', 'meds', 'note']) if (f.querySelector(`[name=${k}]`)) delete ci[k];
       for (const k of ['change', 'discharge']) if (fd.get(k)) ci[k] = fd.get(k);
       for (const k of ['clots', 'dizzy', 'sidepain']) if (fd.has(k)) ci[k] = fd.get(k) === '1';
       if ((fd.get('meds') || '').trim()) ci.meds = fd.get('meds').trim();
@@ -1215,7 +1221,7 @@ document.addEventListener('submit', async (e) => {
 
 function busy(on, msg = '') { const b = $('#busy'); b.hidden = !on; b.querySelector('span').textContent = msg; }
 function afterUnlock() { busy(false); recompute(); S.view = 'app'; render(); if (cloudReady()) syncNow(true); }
-function lockApp() { S.key = null; S.data = null; S.pred = null; S.sheet = null; S.view = 'locked'; render(); }
+function lockApp() { Object.assign(S, { key: null, data: null, pred: null, sheet: null, late: null, report: null, setPage: null, guideOpen: null, histFilter: null, imp: null, view: 'locked' }); render(); }
 
 // ---------------- Face ID ----------------
 async function faceIdSetup() {
@@ -1351,7 +1357,7 @@ async function makeReport() {
   try {
     const R = await import('./report.js');
     const bytes = R.buildReport(S.data, { from, to: t, today: t, sections: on, fmt, pred: hidden('predictions') ? null : S.pred, label: T.label, moods: T.MOOD_GOOD.map((m) => m.code) });
-    S.lastReport = bytes; busy(false);
+    busy(false);
     const how = await R.shareOrDownload(bytes, `cycle-report-${t}.pdf`);
     if (how === 'downloaded') toast('Report saved');
   } catch (e) { busy(false); toast(friendly(e)); }

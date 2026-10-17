@@ -137,7 +137,7 @@ export const LATE_SIGNS = [['weight', 'Weight gain or loss'], ['tired', 'Tiredne
 export const LATE_OTHER = [
   'Perimenopause, the years before menopause, usually between 45 and 55.',
   'An overactive or underactive thyroid.',
-  'PMOS (polycystic ovary syndrome, formerly PCOS).',
+  'PMOS (formerly called PCOS).',
 ];
 export const LATE_DOCTOR = ['you have missed 3 periods in a row', 'you also notice weight change, tiredness, new facial hair, or dry or oily skin', 'your periods have become irregular'];
 export const LATE_URGENT = { today: 'Get advice today if you might be pregnant (even without a positive test) and have pain low on one side of the tummy, bleeding or shoulder-tip pain.',
