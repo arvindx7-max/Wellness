@@ -179,7 +179,7 @@ for (const eng of want) {
     await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 45000 });
     ok(`${eng} v3: encrypted export previews with all 4 periods`, /4 periods/.test(await q.textContent('#sheet')));
     await q.click('#sheet [data-act=import-cancel]');
-    await q.setInputFiles('input[data-act=import-json]', file('b.json', backup([['2026-04-25', '2026-04-29']]))); await q.waitForSelector('#sheet [data-act=import-cancel]');
+    await q.setInputFiles('input[data-act=import-json]', file('b.json', backup([['2026-04-12', '2026-04-16']]))); await q.waitForSelector('#sheet [data-act=import-cancel]');
     await q.click('#sheet [data-act=import-cancel]');
     ok(`${eng} v3: cancel imports nothing`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 4);
     // Look: appearance, theme, companion, cards, one-time note
@@ -287,9 +287,9 @@ for (const eng of want) {
     ok(`${eng} v3.1: a PDF is also read on the main thread (fallback)`, /25 May 2026 - 29 May 2026/.test(mainThread), String(mainThread).slice(0, 100));
     await q.setInputFiles('input[data-act=import-json]', upload('scan.pdf', 'application/pdf', pdfBytes([])));
     ok(`${eng} v3.1: a PDF without text is refused`, await until(q, () => /no readable text/.test(document.querySelector('#toast').textContent)));
-    await q.setInputFiles('input[data-act=import-json]', upload('periods.csv', 'text/csv', Buffer.from('start,end\n2026-04-25,2026-04-29\n')));
+    await q.setInputFiles('input[data-act=import-json]', upload('periods.csv', 'text/csv', Buffer.from('start,end\n2026-04-12,2026-04-16\n')));
     await q.waitForSelector('#sheet .irow');
-    ok(`${eng} v3.1: a CSV is read`, (await rowsOf(q, '#sheet')).join() === '2026-04-25>2026-04-29');
+    ok(`${eng} v3.1: a CSV is read`, (await rowsOf(q, '#sheet')).join() === '2026-04-12>2026-04-16');
     await q.click('#sheet [data-act=import-reset]');
     ok(`${eng} v3.1: cancel leaves the data as it was`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 4 && !(await q.isVisible('#sheet .irow')));
     await q.click('[data-act=paste-open]'); await q.fill('#sheet textarea[name=text]', '05/06/2026'); await q.click('#sheet form[data-form=import-paste] button');

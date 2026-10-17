@@ -27,8 +27,8 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
   d.settings.helpline = { name: 'Test Support Line', number: '+00 000 000' }; const g = run(d, '2026-10-01');
   eq('R9 with a saved support line → call button for that number only', [g[0].phone, g[0].label], ['+00000000', 'Call Test Support Line']); }
 { const d = base(); for (const x of ['2026-09-10', '2026-09-28', '2026-10-01']) d.checkins[x] = { symptoms: { low: 3 } }; eq('R9 only 2 in the last 14 days → no flag', ids(run(d, '2026-10-01')), []); }
-{ const d = { periods: [{ id: 'a', start: '2026-01-01' }, { id: 'b', start: '2026-01-29' }, { id: 'c', start: '2026-03-12' }, { id: 'e', start: '2026-04-25' }], days: {}, checkins: {}, settings: {} };
-  eq('R8 two cycles outside 24–38 → doctor', ids(run(d, '2026-04-27')), ['doctor-range']); }
+{ const d = { periods: [{ id: 'a', start: '2026-01-01' }, { id: 'b', start: '2026-01-29' }, { id: 'c', start: '2026-03-12' }, { id: 'e', start: '2026-04-22' }], days: {}, checkins: {}, settings: {} };
+  eq('R8 two cycles outside 24–38 → doctor', ids(run(d, '2026-04-23')), ['doctor-range']); }
 { const d = base(); d.checkins['2026-09-30'] = { change: 'h1x2', clots: true }; eq('urgent sorted first', ids(run(d, '2026-10-01')), ['soak', 'clots']); }
 // recommendations
 { const r = recsFor({ symptoms: { cramps: 2 } }, 'menstruation'); eq('cramps → ACOG suggestion with escalation', [r.length, r[0].src, !!r[0].escalate], [1, 'acogPain', true]); }

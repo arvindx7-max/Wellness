@@ -60,15 +60,15 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 }
 // 6. Exclusion and validation (10–90 days)
 {
-  const ps = P('2026-01-01', '2026-01-29', '2026-04-15', '2026-05-13', '2026-06-10');
+  const ps = P('2026-01-01', '2026-01-29', '2026-04-14', '2026-05-12', '2026-06-09');
   const r = predict(ps, {}, '2026-06-12');
-  eq('D1: 76 days > 2 × 28 → suspected missed period, left out → 28', [r.cycleLen, r.notes.some((n) => n.kind === 'missed')], [28, true]);
+  eq('D1: 75 days > 2 × 28 → suspected missed period, left out → 28', [r.cycleLen, r.notes.some((n) => n.kind === 'missed')], [28, true]);
   ps[1].confirmedLong = true;
-  eq('D1: once confirmed, the 76-day cycle is used → 40', predict(ps, {}, '2026-06-12').cycleLen, 40);
+  eq('D1: once confirmed, the 75-day cycle is used → 40', predict(ps, {}, '2026-06-12').cycleLen, 40);
   ps[1].confirmedLong = false;
   ps[1].excluded = true;
   const r2 = predict(ps, {}, '2026-06-12');
-  eq('excluding the 76-day cycle → 28', r2.cycleLen, 28);
+  eq('excluding the 75-day cycle → 28', r2.cycleLen, 28);
   const r3 = predict(P('2026-01-01', '2026-05-01', '2026-05-29'), {}, '2026-06-01');
   eq('120-day cycle not used, note raised', [r3.usedCycles, r3.notes.some((n) => n.kind === 'check')], [1, true]);
 }
@@ -94,8 +94,8 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 {
   const one = predict(P('2026-01-01', '2026-01-29', '2026-02-26', '2026-04-10'), {}, '2026-04-12');
   eq('one 43-day cycle → info note', one.notes.map((n) => n.kind).filter((k) => k !== 'late'), ['info']);
-  const two = predict(P('2026-01-01', '2026-01-29', '2026-03-12', '2026-04-25'), {}, '2026-04-27');
-  eq('42 and 44 days → doctor note', two.notes.some((n) => n.kind === 'doctor'), true);
+  const two = predict(P('2026-01-01', '2026-01-29', '2026-03-12', '2026-04-22'), {}, '2026-04-23');
+  eq('42 and 41 days → doctor note', two.notes.some((n) => n.kind === 'doctor'), true);
 }
 // 10. Short cycle: fertile window never reaches back before the cycle start
 {
@@ -138,11 +138,11 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 
 // 15. D1 boundaries
 {
-  const r = predict(P('2026-01-01', '2026-01-29', '2026-02-26', '2026-04-23'), {}, '2026-04-25');
+  const r = predict(P('2026-01-01', '2026-01-29', '2026-02-26', '2026-04-23'), {}, '2026-04-26');
   eq('D1: 56 days = exactly 2 × 28 → not suspected', r.notes.some((n) => n.kind === 'missed'), false);
   const r2 = predict(P('2026-01-01', '2026-01-29', '2026-03-27'), {}, '2026-03-29');
   eq('D1: needs at least 2 other cycles', r2.notes.some((n) => n.kind === 'missed'), false);
-  const r3 = predict(P('2026-01-01', '2026-03-01', '2026-03-29', '2026-04-26'), {}, '2026-04-28');
+  const r3 = predict(P('2026-01-01', '2026-03-01', '2026-03-29', '2026-04-26'), {}, '2026-04-27');
   eq('D1: an old long cycle (59 vs 28, 28) is suspected too', [r3.notes.filter((n) => n.kind === 'missed').length, r3.cycleLen], [1, 28]);
 }
 
@@ -173,16 +173,16 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 // v4 (D4): a positive ovulation test sharpens the current cycle only; the start never moves later
 {
   const ps = P('2026-07-03', '2026-08-02', '2026-09-01');
-  const a = predict(ps, {}, '2026-09-14', {});
-  const b = predict(ps, {}, '2026-09-14', { '2026-09-13': { ovu: [{ r: 'pos', at: '08:30' }] }, '2026-09-14': { ovu: [{ r: 'peak', at: '08:00' }] } });
-  eq('D4: likely ovulation is the day after the first positive test', b.ovulation.likely, '2026-09-14');
+  const a = predict(ps, {}, '2026-09-13', {});
+  const b = predict(ps, {}, '2026-09-13', { '2026-09-12': { ovu: [{ r: 'pos', at: '08:30' }] }, '2026-09-13': { ovu: [{ r: 'peak', at: '08:00' }] } });
+  eq('D4: likely ovulation is the day after the first positive test', b.ovulation.likely, '2026-09-13');
   eq('D4: fertile days never start later than the calendar estimate', b.possible[0] <= a.possible[0], true);
-  eq('D4: fertile days end 3 days after the test', b.possible[1], '2026-09-16');
-  eq('D4: the first positive test is the anchor (a later Peak does not slide it)', b.cycles[0].testAnchor, '2026-09-13');
+  eq('D4: fertile days end 3 days after the test', b.possible[1], '2026-09-15');
+  eq('D4: the first positive test is the anchor (a later Peak does not slide it)', b.cycles[0].testAnchor, '2026-09-12');
   eq('D4: later cycles are unchanged', b.cycles[1].possible.join(), a.cycles[1].possible.join());
-  const c = predict(ps, {}, '2026-09-14', { '2026-09-13': { ovu: [{ r: 'neg' }] } });
+  const c = predict(ps, {}, '2026-09-13', { '2026-09-12': { ovu: [{ r: 'neg' }] } });
   eq('D4: a negative test changes nothing', c.possible.join(), a.possible.join());
-  const d = predict(ps, {}, '2026-09-14', { '2026-08-20': { ovu: [{ r: 'pos' }] } });
+  const d = predict(ps, {}, '2026-09-13', { '2026-08-19': { ovu: [{ r: 'pos' }] } });
   eq('D4: a test from an earlier cycle is ignored', d.possible.join(), a.possible.join());
 }
 // v4 (D10): a current cycle marked as pregnancy pauses predictions
