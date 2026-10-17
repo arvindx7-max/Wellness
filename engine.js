@@ -11,6 +11,7 @@ export const CONST = {
   WINDOW: 6,           // cycles used for the average — design parameter (spec 3.2)
   DEFAULT_CYCLE: 29,   // population mean 29.3 days (Bull et al. 2019), used only with no data at all
   DEFAULT_PERIOD: 4,   // mean bleed length 4.0 days (Bull et al. 2019)
+  RANGE_SD: 1.5,       // R1 (v3): next-period range = ±1.5 standard deviations of her own cycle lengths (a private backtest showed ±1 SD was too narrow)
   NO_HISTORY_SPREAD: 4,// with fewer than 2 data points: FIGO 2018 normal variation expressed as ±4 days
   VALID_MIN: 10,       // cycles outside 10–90 days are not used until confirmed (Bull 2019 inclusion range)
   VALID_MAX: 90,
@@ -92,7 +93,7 @@ export function predict(periods, settings = {}, today = localToday(), days = {})
   let usedDefault = false;
   if (!samples.length) { samples.push(CONST.DEFAULT_CYCLE); usedDefault = true; }
   const cycleLen = Math.round(mean(samples));
-  const spread = samples.length >= 2 ? Math.max(1, Math.round(sd(samples))) : CONST.NO_HISTORY_SPREAD;
+  const spread = samples.length >= 2 ? Math.max(1, Math.round(CONST.RANGE_SD * sd(samples))) : CONST.NO_HISTORY_SPREAD;
 
   const lens = ps.map(periodLength).filter(Boolean).slice(-CONST.WINDOW);
   const periodLen = lens.length ? Math.round(mean(lens)) : (Number(settings.usualPeriod) || CONST.DEFAULT_PERIOD);

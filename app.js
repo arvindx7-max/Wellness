@@ -1,12 +1,14 @@
-// Cycle — v2.3 (privacy onboarding fixes, adaptive layout B3, B4). Spec v0.3: FR-01–FR-17, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v3 (backup start B6, wider range R1, history import FR-26, new look U2). Spec v0.3: FR-01–FR-17, FR-26, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
 import * as C from './cloud.js';
 import * as T from './content.js';
 import { evaluate, recsFor, heavyDays } from './rules.js';
+import * as TH from './themes.js';
+import { moon, sprout } from './companion.js';
 
-export const VERSION = 'v2.3';
+export const VERSION = 'v3';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -21,7 +23,7 @@ async function kvClear() { const x = await db(); return new Promise((res) => { c
 // ---------------- state ----------------
 const S = {
   view: 'boot', tab: 'today', meta: null, key: null, data: null, pred: null, month: null,
-  sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0,
+  sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0, imp: null,
   cloud: { token: null, status: 'off', msg: '', busy: false },
 };
 const fresh = () => ({ app: 'cycle', v: 1, settings: { updatedAt: Date.now() }, periods: [], days: {}, checkins: {}, acks: {} });
@@ -65,8 +67,27 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 function openSheet(name, data = {}) { S.sheet = { name, ...data }; render(); setTimeout(() => { const f = $('#sheet [autofocus]'); if (f) f.focus(); }, 50); }
 function closeSheet() { S.sheet = null; render(); }
 
+// ---------------- U2: look (appearance, theme, companion, cards). Stored only in her encrypted settings. ----------------
+function look() {
+  const l = (S.data && S.data.settings && S.data.settings.look) || {};
+  return { ...TH.LOOK_DEFAULT, ...l, cards: { ...TH.LOOK_DEFAULT.cards, ...(l.cards || {}) } };
+}
+async function setLook(patch) {
+  S.data.settings = { ...S.data.settings, look: { ...look(), ...patch }, updatedAt: Date.now() };
+  await persist(); render();
+}
+const sysDark = () => !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+function applyLook() {
+  const l = look(), r = document.documentElement;
+  const dark = l.mode === 'dark' || (l.mode === 'auto' && sysDark());
+  const t = TH.THEMES[l.theme] || TH.THEMES.tide; const [a, b] = dark ? t.dark : t.light; const ac = dark ? t.accent[1] : t.accent[0];
+  r.dataset.mode = l.mode;
+  for (const [k, v] of [['--h1', a], ['--h2', b], ['--accent', ac], ['--accent-tint', TH.tint(ac, dark ? 0.22 : 0.12)], ['--on-accent', dark ? TH.ON_ACCENT.dark : TH.ON_ACCENT.light]]) r.style.setProperty(k, v);
+}
+
 // ---------------- render ----------------
 function render() {
+  applyLook();
   const app = $('#app');
   if (S.view === 'welcome') app.innerHTML = welcomeView();
   else if (S.view === 'onboard') app.innerHTML = onboardView();
@@ -99,7 +120,9 @@ function welcomeView() {
     <h1>Cycle</h1>
     <p class="lede">A private tracker for your periods and fertile days. Everything stays encrypted on your phone and, if you choose, in your own Google Drive.</p>
     <button class="btn primary wide" data-act="start">Set up on this phone</button>
+    <button class="btn wide" data-act="import-start">Start from a backup file</button>
     <button class="btn wide" data-act="restore-start" ${cfg.googleClientId ? '' : 'disabled'}>Restore from Google Drive</button>
+    ${cfg.googleClientId ? '' : '<p class="fine">Restoring from Google Drive is not available in this copy of Cycle, because Google sign-in is not set up.</p>'}
     <div class="notice"><p><strong>Used Cycle before on this iPhone?</strong> The Home Screen app and Safari keep separate data. If you set Cycle up from the Home Screen icon, open it from there; if you used it in Safari, open it in Safari. Setting up here creates a new, empty Cycle.</p></div>
   </section>`;
 }
@@ -171,14 +194,34 @@ function forgotView() {
     <button class="link" data-act="back-locked">Back</button></section>`;
 }
 function importView() {
-  return `<section class="intro form-page"><h1>Start again from a backup</h1>
+  const m = S.imp; let body;
+  if (!m) body = `<p class="lede">Choose a backup you exported from Cycle, or the ${h(C.VAULT_NAME)} file from your Google Drive.</p>
+    <label class="btn primary file wide">Choose a file<input type="file" accept="application/json,.json" data-act="import-pick" hidden></label>`;
+  else if (m.kind === 'vault' && !m.data) body = vaultOpenForm();
+  else body = `<div class="notice"><p><strong>${h(backupSummary(m.data))}</strong></p><p class="fine">Nothing is stored yet. Choose a passphrase to encrypt it on this device.</p></div>
     <form class="stack" data-form="import-new">${USER}
-      <label>Backup file<input type="file" name="file" accept="application/json,.json" required></label>
-      ${pw('p1', 'New passphrase', 'new-password')}${pw('p2', 'Repeat it', 'new-password')}
+      ${pw('p1', 'New passphrase', 'new-password', true)}${pw('p2', 'Repeat it', 'new-password')}
       <label class="choice"><input type="checkbox" name="saved" required> I have saved my new passphrase</label>
-      <p class="fine">This replaces the locked Cycle data on this device.</p>
-      <button class="btn primary wide">Restore backup</button></form>
-    <button class="link" data-act="forgot">Back</button></section>`;
+      ${S.meta ? '<p class="fine">This replaces the locked Cycle data on this device.</p>' : ''}
+      <button class="btn primary wide">Restore backup</button></form>`;
+  return `<section class="intro form-page"><h1>${S.meta ? 'Start again from a backup' : 'Start from a backup file'}</h1>${body}
+    <button class="link" data-act="${S.meta ? 'forgot' : 'import-back'}">Back</button></section>`;
+}
+const vaultOpenForm = () => `<p class="lede">This file is encrypted: an encrypted backup or a Google Drive vault file. Enter the passphrase it was made with to read it.</p>
+  <form class="stack" data-form="import-open">${USER}${pw('p', 'Passphrase of this file', 'current-password', true, 0)}<button class="btn primary wide">Open the file</button></form>`;
+// FR-26: read a chosen file. A Cycle backup is plain JSON; a Drive vault file is encrypted and needs its passphrase first.
+async function readBackup(file) {
+  const text = await file.text(); let obj = null;
+  try { obj = JSON.parse(text); } catch { /* handled below */ }
+  const okPeriods = (d) => d && d.app === 'cycle' && Array.isArray(d.periods) && d.periods.every((x) => x && typeof x === 'object' && isDate(x.start));
+  if (okPeriods(obj)) return { kind: 'plain', data: obj };
+  if (obj && obj.app === 'cycle-wellness-vault') return { kind: 'vault', head: C.vaultHeader(text), text };
+  throw new Error('This file is not a Cycle backup.');
+}
+// I1: what a file holds, shown before anything is imported
+function backupSummary(d) {
+  const ps = livePeriods(d.periods).slice().sort((x, y) => (x.start < y.start ? -1 : 1));
+  return ps.length ? `${plural(ps.length, 'period')}, from ${fmt(ps[0].start, true)} to ${fmt(ps[ps.length - 1].start, true)}` : 'This file holds no periods';
 }
 function eraseView() {
   return `<section class="intro form-page"><h1>Erase Cycle on this device?</h1>
@@ -216,32 +259,61 @@ function todayView() {
   else sub = 'Next period expected now';
   const fertileLine = st.id === 'fertile'
     ? `<p class="fertile-line ${st.peak ? 'peak' : ''}">${wording ? (st.peak ? 'High chance of pregnancy' : 'Higher chance of pregnancy') : (st.peak ? 'Peak fertile days (estimated)' : 'Possible fertile days (estimated)')}</p>` : '';
+  const heroBtn = st.id === 'menstruation' && st.periodOpen ? `<button class="hero-btn" data-act="period-end" data-date="${t}">Period ended today</button>`
+    : st.id === 'menstruation' ? '' : `<button class="hero-btn" data-act="period-start" data-date="${t}">Period started today</button>`;
   const actions = st.id === 'menstruation' && st.periodOpen
-    ? `<button class="btn primary" data-act="period-end" data-date="${t}">Period ended today</button><button class="btn" data-act="period-end-earlier">Ended on another day</button>`
-    : st.id === 'menstruation' ? '' : `<button class="btn primary" data-act="period-start" data-date="${t}">Period started today</button><button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
+    ? '<button class="btn" data-act="period-end-earlier">Ended on another day</button>'
+    : st.id === 'menstruation' ? '' : `<button class="btn" data-act="add-past">Started on another day</button>${openPeriodBefore(t) ? '<button class="btn" data-act="period-end-earlier">Log when my last period ended</button>' : ''}`;
   const flow = (S.data.days[t] || {}).flow || 'none';
   const est = `<p class="estimate">${st.id === 'late' ? `Your period was expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. Forecasts pause until you log it.` : `Next period estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}. ${confidenceText(p)}`}</p>`;
   // One list of blocks; on a phone they stack in this order, on a laptop they split into two columns.
-  return `${topbar('Today', `${weekday(t)}, ${fmt(t, true)}`)}
+  const L = look();
+  return `${heroView(p, sub, heroBtn, t)}
   ${flagCards()}
+  ${L.companion !== 'off' && !L.noteSeen ? `<section class="note companion-note"><p>${h(TH.COMPANION_CAPTION)}</p><button class="btn small" data-act="note-seen">Got it</button></section>` : ''}
   <div class="today-grid">
     <div class="col">
       <section class="ring-block o1">${cycleRing(p)}
         <div class="ring-center"><span class="cd">Day ${st.cycleDay}</span><span class="stl">${h(st.label)}</span><span class="sub">${sub}</span></div></section>
       <div class="o2">${fertileLine}${wording && st.id === 'fertile' ? `<p class="warning">${WARNING}</p>` : ''}${est}</div>
-      <div class="o4">${weekStrip(p)}</div>
+      <div class="o4">${L.cards.week ? weekStrip(p) : ''}</div>
       <div class="actions o5">${actions}</div>
       <section class="card o6"><h2>Bleeding today</h2>
         <div class="chips" role="radiogroup" aria-label="Bleeding today">${FLOWS.map(([v, l]) => `<button class="chip ${flow === v ? 'on' : ''}" role="radio" aria-checked="${flow === v}" data-act="flow" data-date="${t}" data-flow="${v}">${l}</button>`).join('')}</div></section>
     </div>
     <div class="col">
       <div class="o2">${sharpenCard(p)}</div>
-      <div class="o3">${checkinCard(t)}</div>
-      <div class="o8">${phaseCard(st.id)}</div>
-      <div class="o9">${foodTeaser()}</div>
+      <div class="o3">${L.cards.checkin ? checkinCard(t) : ''}</div>
+      <div class="o8">${L.cards.phase ? phaseCard(st.id) : ''}</div>
+      <div class="o9">${L.cards.food ? foodTeaser() : ''}</div>
       <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
     </div>
   </div>`;
+}
+// U2: one big readout in the header, with the cycle-aware companion
+function heroView(p, sub, btn, t) {
+  const st = p.state, L = look();
+  let lead, big;
+  if (st.id === 'late') { lead = 'Period late by'; big = plural(st.daysLate, 'day'); }
+  else if (st.daysToNext === 0) { lead = 'Period expected'; big = 'today'; }
+  else if (st.daysToNext > 0) { lead = 'Next period in'; big = plural(st.daysToNext, 'day'); }
+  else { lead = 'Period expected'; big = 'now'; }
+  const wording = !!S.data.settings.wording;
+  const line = st.id === 'fertile' ? (wording ? (st.peak ? 'High chance of pregnancy' : 'Higher chance of pregnancy') : (st.peak ? 'Peak fertile days (estimated)' : 'Possible fertile days (estimated)'))
+    : st.id === 'late' ? `Expected ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}` : `Estimated ${fmt(p.nextRange[0])} to ${fmt(p.nextRange[1])}`;
+  const start = p.lastStart, total = Math.max(diff(p.nextStart, start), 1);
+  const per = p.lastPeriod.end ? diff(p.lastPeriod.end, start) + 1 : p.periodLen;
+  const phase = st.id === 'menstruation' ? 'period' : st.id === 'fertile' ? 'fertile' : st.id === 'luteal' || st.id === 'late' ? 'luteal' : 'follicular';
+  const c = { d: st.cycleDay, len: total, per, f0: diff(p.possible[0], start) + 1, f1: diff(p.possible[1], start) + 1, ov: diff(p.ovulation.likely, start) + 1, phase };
+  const art = L.companion === 'moon' ? moon(c) : L.companion === 'sprout' ? sprout(c) : '';
+  return `<section class="hero ${art ? 'has-comp' : ''}" aria-label="Today at a glance">
+    <div class="top"><h1>Today · ${weekday(t)}, ${fmt(t, true)}</h1>${syncPill()}</div>
+    <div class="state">Day ${st.cycleDay} · ${h(st.label)}</div>
+    <div class="lead">${lead}</div><div class="big">${big}</div>
+    <div class="sub">${h(line)}</div>
+    ${btn}
+    ${art ? `<div class="companion" data-stage="${L.companion}-${phase}" aria-hidden="true">${art}</div>` : ''}
+  </section>`;
 }
 // B2 item 1: explain wide estimates and how to sharpen them
 function sharpenCard(p) {
@@ -475,6 +547,7 @@ function settingsView() {
       <label>Diet<select name="diet">${s.diet ? '' : '<option value="" selected>Choose</option>'}${T.DIETS.map(([v, t]) => `<option value="${v}" ${s.diet === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <p class="fine">Once you have 3 logged cycles, predictions use your own history and the usual lengths above no longer matter.</p>
       <button class="btn">Save</button></form></section>
+  ${lookCard()}
   <section class="card"><h2>Pregnancy-chance wording</h2>
     <p class="fine">Shows fertile days as "High" or "Higher chance of pregnancy", with a warning. No day is ever shown as safe.</p>
     <label class="switch"><span>Show pregnancy-chance wording</span><input type="checkbox" role="switch" data-act="wording" ${s.wording ? 'checked' : ''}></label></section>
@@ -495,8 +568,8 @@ function settingsView() {
       <button class="btn">Change passphrase</button></form></section>
   ${syncCard()}
   <section class="card"><h2>Your data</h2>
-    <p class="fine">A backup file is not encrypted. Keep it somewhere private.</p>
-    <div class="row"><button class="btn" data-act="export-json">Export backup</button><button class="btn" data-act="export-csv">Export periods as CSV</button></div>
+    <p class="fine">An encrypted backup opens only with the passphrase you use now. A plain backup and the CSV file are readable by anyone who gets them, so keep those somewhere private.</p>
+    <div class="row"><button class="btn" data-act="export-enc">Export encrypted backup</button><button class="btn" data-act="export-json">Export plain backup</button><button class="btn" data-act="export-csv">Export periods as CSV</button></div>
     <label class="btn file">Import a backup<input type="file" accept="application/json,.json" data-act="import-json" hidden></label>
     <button class="btn danger" data-act="wipe">Delete all data on this device</button></section>
   <section class="card about"><h2>About</h2>
@@ -509,6 +582,17 @@ function settingsView() {
       <li>ACOG, Mayo Clinic and CDC: suggestions for symptoms and the warning signs for heavy or unusual bleeding</li>
       <li>NIH Office of Dietary Supplements: iron needs, iron in foods, and what helps or reduces its absorption</li>
     </ul></section></div>`;
+}
+function lookCard() {
+  const l = look();
+  const seg = (act, items, cur) => `<div class="seg2" role="group">${items.map(([v, t]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${t}</button>`).join('')}</div>`;
+  return `<section class="card look-card"><h2>Look</h2>
+    <h3>Appearance</h3>${seg('look-mode', TH.MODES, l.mode)}
+    <h3>Theme</h3><div class="swatches" role="group">${Object.entries(TH.THEMES).map(([k, t]) => `<button class="sw" data-act="look-theme" data-v="${k}" aria-pressed="${l.theme === k}"><i style="background:linear-gradient(160deg,${t.light[0]},${t.light[1]})"></i>${t.name}</button>`).join('')}</div>
+    <h3>Companion</h3>${seg('look-companion', TH.COMPANIONS, l.companion)}
+    <p class="fine">${h(TH.COMPANION_CAPTION)}</p>
+    <h3>Cards on Today</h3>${TH.CARDS.map(([k, t]) => `<label class="switch"><span>${t}</span><input type="checkbox" role="switch" data-act="look-card" data-k="${k}" ${l.cards[k] ? 'checked' : ''}></label>`).join('')}
+    <p class="fine">Period and fertile colours stay the same in every theme. Your choices are stored only in your encrypted data.</p></section>`;
 }
 function syncCard() {
   if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
@@ -593,6 +677,13 @@ function sheetBody() {
       <p class="fine">Fertile days will be labelled "High" or "Higher chance of pregnancy". No day is ever labelled safe, because a wrong "safe" day can lead to an unplanned pregnancy.</p>
       <div class="stack-btns"><button class="btn primary" data-act="wording-accept">I understand, turn it on</button><button class="btn" data-act="close-sheet">Cancel</button></div>`;
   }
+  if (s.name === 'import-preview') {
+    const m = S.imp; if (!m) return '';
+    if (m.kind === 'vault' && !m.data) return `<h2>Encrypted file</h2>${vaultOpenForm()}<button class="btn wide" data-act="import-cancel">Cancel</button>`;
+    return `<h2>Import this backup?</h2><p><strong>${h(backupSummary(m.data))}.</strong></p>
+      <p class="fine">It is merged with the data on this device: for each record, the newest version wins.</p>
+      <div class="stack-btns"><button class="btn primary" data-act="import-confirm">Import</button><button class="btn" data-act="import-cancel">Cancel</button></div>`;
+  }
   if (s.name === 'confirm') {
     return `<h2>${h(s.title)}</h2><p class="fine">${h(s.text)}</p><div class="stack-btns"><button class="btn ${s.danger ? 'danger' : 'primary'}" data-act="confirm-yes">${h(s.yes)}</button><button class="btn" data-act="close-sheet">Cancel</button></div>`;
   }
@@ -653,9 +744,14 @@ document.addEventListener('click', async (e) => {
     if (a === 'start') { S.view = 'onboard'; render(); }
     else if (a === 'restore-start') { S.restore = {}; S.view = 'restore'; render(); }
     else if (a === 'restore-cancel') { S.view = S.meta ? 'forgot' : 'welcome'; render(); }
-    else if (a === 'forgot') { S.view = 'forgot'; render(); }
+    else if (a === 'forgot') { S.imp = null; S.view = 'forgot'; render(); }
     else if (a === 'back-locked') { S.view = 'locked'; render(); }
-    else if (a === 'import-start') { S.view = 'import'; render(); }
+    else if (a === 'import-start') { S.imp = null; S.view = 'import'; render(); }
+    else if (a === 'import-back') { S.imp = null; S.view = 'welcome'; render(); }
+    else if (a === 'import-cancel') { S.imp = null; closeSheet(); }
+    else if (a === 'import-confirm') { const inc = S.imp.data; S.imp = null; S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); toast(`Backup imported: ${plural(livePeriods(inc.periods).length, 'period')}`); }
+    else if (a === 'look-mode' || a === 'look-theme' || a === 'look-companion') await setLook({ [a.slice(5)]: b.dataset.v });
+    else if (a === 'note-seen') await setLook({ noteSeen: true });
     else if (a === 'erase-start') { S.view = 'erase'; render(); }
     else if (a === 'pw-toggle') { const inp = b.parentElement.querySelector('input'); const show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-label', show ? 'Hide passphrase' : 'Show passphrase'); }
     else if (a === 'confirm-long') { const p = S.data.periods.find((x) => x.id === b.dataset.id); Object.assign(p, { confirmedLong: true, updatedAt: Date.now() }); await persist(); render(); toast('Cycle length confirmed'); }
@@ -685,6 +781,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'wording-accept') { S.data.settings = { ...S.data.settings, wording: true, wordingAcceptedAt: new Date().toISOString(), updatedAt: Date.now() }; await persist(); closeSheet(); toast('Pregnancy-chance wording is on'); }
     else if (a === 'faceid-off') { S.meta.lock = null; await kvSet('meta', S.meta); render(); toast('Face ID unlock is off'); }
     else if (a === 'lock-now') lockApp();
+    else if (a === 'export-enc') download(`cycle-backup-${today()}.encrypted.json`, await C.sealVault(S.data, S.key, S.meta.salt, S.meta.iter), 'application/json');
     else if (a === 'export-json') download(`cycle-backup-${today()}.json`, JSON.stringify(S.data, null, 1), 'application/json');
     else if (a === 'export-csv') download(`cycle-periods-${today()}.csv`, csv(), 'text/csv');
     else if (a === 'wipe') confirmSheet('Delete all data on this device?', 'Everything Cycle stores on this device is removed. Your Google Drive vault, if any, is not touched.', 'Delete everything', async () => {
@@ -709,13 +806,13 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.act === 'wording') {
     if (el.checked) { el.checked = false; openSheet('wording'); }
     else { S.data.settings = { ...S.data.settings, wording: false, updatedAt: Date.now() }; await persist(); render(); toast('Pregnancy-chance wording is off'); }
+  } else if (el.dataset.act === 'look-card') {
+    const l = look(); await setLook({ cards: { ...l.cards, [el.dataset.k]: el.checked } });
   } else if (el.dataset.act === 'import-json' && el.files[0]) {
-    try {
-      const inc = JSON.parse(await el.files[0].text());
-      if (inc.app !== 'cycle' || !Array.isArray(inc.periods)) throw new Error('This file is not a Cycle backup.');
-      S.data = upgrade(C.merge(S.data, inc)); await persist(); render(); toast(`Backup imported: ${livePeriods(inc.periods).length} periods`);
-    } catch (err) { toast(err.message); }
+    try { S.imp = await readBackup(el.files[0]); openSheet('import-preview'); } catch (err) { toast(err.message); }
     el.value = '';
+  } else if (el.dataset.act === 'import-pick' && el.files[0]) {
+    try { S.imp = await readBackup(el.files[0]); render(); } catch (err) { toast(err.message); }
   }
 });
 document.addEventListener('submit', async (e) => {
@@ -744,12 +841,16 @@ document.addEventListener('submit', async (e) => {
     } else if (kind === 'erase') {
       if ((fd.get('confirm') || '').trim().toUpperCase() !== 'ERASE') { toast('Type ERASE to confirm.'); return; }
       await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render(); toast('Cycle was erased on this device');
+    } else if (kind === 'import-open') {
+      busy(true, 'Opening the file');
+      const m = S.imp; const key = await K.deriveKey(fd.get('p'), m.head.salt, m.head.iter);
+      const data = await C.openVault(m.text, key);
+      if (!data || data.app !== 'cycle' || !Array.isArray(data.periods)) throw new Error('This file does not hold Cycle data.');
+      S.imp = { kind: 'vault', data: upgrade(data) }; busy(false); render();
     } else if (kind === 'import-new') {
       if (fd.get('p1') !== fd.get('p2')) { toast('The two passphrases are different.'); return; }
-      const inc = JSON.parse(await fd.get('file').text());
-      if (inc.app !== 'cycle' || !Array.isArray(inc.periods)) throw new Error('This file is not a Cycle backup.');
       busy(true, 'Restoring');
-      const salt = K.newSalt(); S.key = await K.deriveKey(fd.get('p1'), salt); S.data = upgrade(inc);
+      const salt = K.newSalt(); S.key = await K.deriveKey(fd.get('p1'), salt); S.data = upgrade(S.imp.data); S.imp = null;
       S.meta = { salt, iter: K.ITER, created: new Date().toISOString(), lock: null, cloud: null };
       await kvSet('meta', S.meta); await persist(); busy(false); S.view = S.faceIdOk ? 'faceid' : 'app'; render(); toast('Backup restored');
     } else if (kind === 'change-pass') {
@@ -936,6 +1037,7 @@ function csv() {
   } else { S.view = 'locked'; if (red && red.next === 'sync') S.tab = 'settings'; }
   if (red && red.error) toast(red.error);
   render();
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyLook(); }); } catch { /* old browser */ }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') S.hiddenAt = Date.now();
     else if (S.view === 'app') {

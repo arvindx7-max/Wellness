@@ -14,13 +14,13 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   const r = predict(P('2026-07-03', '2026-08-02', '2026-08-30', '2026-09-29'), {}, '2026-10-03');
   eq('3.7 cycle lengths', cycles(P('2026-07-03', '2026-08-02', '2026-08-30', '2026-09-29')).map((c) => c.length), [30, 28, 30]);
   eq('3.7 mean cycle', r.cycleLen, 29);
-  eq('3.7 spread s', r.spread, 1);
+  eq('3.7 spread s (1.5 × SD 1.15 = 1.73 → 2)', r.spread, 2);
   eq('3.7 next period', r.nextStart, '2026-10-28');
-  eq('3.7 next range', r.nextRange, ['2026-10-27', '2026-10-29']);
+  eq('3.7 next range', r.nextRange, ['2026-10-26', '2026-10-30']);
   eq('3.7 ovulation likely', r.ovulation.likely, '2026-10-15');
-  eq('3.7 ovulation range', [r.ovulation.early, r.ovulation.late], ['2026-10-11', '2026-10-18']);
+  eq('3.7 ovulation range', [r.ovulation.early, r.ovulation.late], ['2026-10-10', '2026-10-19']);
   eq('3.7 peak window', r.peak, ['2026-10-10', '2026-10-16']);
-  eq('3.7 possible fertile days', r.possible, ['2026-10-06', '2026-10-19']);
+  eq('3.7 possible fertile days', r.possible, ['2026-10-05', '2026-10-20']);
   eq('3.7 confidence', r.confidence, 'Medium');
   eq('3.7 state on 3 Oct (no end logged; 4-day default passed)', [r.state.id, r.state.cycleDay], ['follicular', 5]);
 }
@@ -55,8 +55,8 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
 {
   const r = predict(P('2026-01-01', '2026-01-25', '2026-03-01', '2026-03-28', '2026-05-03', '2026-05-29'), {}, '2026-06-01');
   eq('irregular lengths', cycles(P('2026-01-01', '2026-01-25', '2026-03-01', '2026-03-28', '2026-05-03', '2026-05-29')).map((c) => c.length), [24, 35, 27, 36, 26]);
-  eq('irregular mean 29.6 → 30, spread 5.50 → 6', [r.cycleLen, r.spread], [30, 6]);
-  eq('irregular next range ±6', r.nextRange, ['2026-06-22', '2026-07-04']);
+  eq('irregular mean 29.6 → 30, SD 5.50 × 1.5 = 8.25 → 8', [r.cycleLen, r.spread], [30, 8]);
+  eq('irregular next range ±8', r.nextRange, ['2026-06-20', '2026-07-06']);
 }
 // 6. Exclusion and validation (10–90 days)
 {
@@ -87,7 +87,8 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('3 Oct follicular (period ended 2 Oct)', at('2026-10-03'), 'follicular');
   eq('6 Oct fertile (possible)', at('2026-10-06'), 'fertile');
   eq('15 Oct fertile peak', predict(ps, {}, '2026-10-15').state.peak, true);
-  eq('20 Oct luteal', at('2026-10-20'), 'luteal');
+  eq('20 Oct still fertile (last possible day)', at('2026-10-20'), 'fertile');
+  eq('21 Oct luteal', at('2026-10-21'), 'luteal');
 }
 // 9. FIGO range notes: one cycle outside 24–38 → info; two in a row → doctor
 {
@@ -131,7 +132,8 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('day 6 with bleeding logged → period, not follicular', predict(ps, {}, '2026-10-04', days).state.id, 'menstruation');
   eq('calendar shows 4 Oct as period', dayInfo('2026-10-04', predict(ps, {}, '2026-10-04', days), ps, days).logged, true);
   eq('bleeding 7 days after the period with nothing logged between → not the same period', predict(ps, {}, '2026-10-10', { '2026-10-10': { flow: 'light' } }).state.id === 'menstruation', false);
-  eq('explicit "none" ends it', predict(ps, {}, '2026-10-05', { ...days, '2026-10-05': { flow: 'none' } }).state.id, 'follicular');
+  eq('explicit "none" ends it', predict(ps, {}, '2026-10-05', { ...days, '2026-10-05': { flow: 'none' } }).state.id, 'fertile');
+  eq('R1 constant is 1.5 SD', CONST.RANGE_SD, 1.5);
 }
 
 // 15. D1 boundaries
