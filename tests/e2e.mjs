@@ -26,7 +26,12 @@ const SIZES = { phone: [390, 844], 'phone-landscape': [844, 390], laptop: [1470,
 const ENGINES = { chromium, webkit };
 const want = (process.env.BROWSERS || 'chromium').split(',');
 let pass = 0, fail = 0; const errors = [];
-const ok = (name, cond, info = '') => { cond ? pass++ : fail++; if (!cond) console.log(`FAIL  ${name} ${info}`); };
+const CI = !!process.env.GITHUB_ACTIONS; // in GitHub Actions, failures also show as annotations on the run
+const ok = (name, cond, info = '') => { cond ? pass++ : fail++; if (!cond) { console.log(`FAIL  ${name} ${info}`); if (CI) console.log(`::error::FAIL ${name} ${String(info).slice(0, 300)}`); } };
+const until = (p, fn, arg) => p.waitForFunction(fn, arg, { timeout: 10000 }).then(() => true, () => false);
+// saved AND drawn again: the settings buttons show the new choice only after the app has re-rendered
+const lookIs = (p, want) => until(p, (w) => { const l = (window.__cycle.S.data.settings.look) || {};
+  return Object.entries(w).every(([k, v]) => { const b = document.querySelector(`[data-act=look-${k}][data-v="${v}"]`); return l[k] === v && !!b && b.getAttribute('aria-pressed') === 'true'; }); }, want);
 
 async function setup(p) {
   await p.click('[data-act=start]');
@@ -123,8 +128,8 @@ for (const eng of want) {
     ok(`${eng} v3: welcome offers a backup start`, await q.isVisible('[data-act=import-start]'));
     ok(`${eng} v3: greyed Drive button is explained`, (await q.isDisabled('[data-act=restore-start]')) && /not available in this copy/.test(await q.textContent('.intro')));
     await q.click('[data-act=import-start]');
-    await q.setInputFiles('input[data-act=import-pick]', file('notes.json', '{"hello":1}')); await q.waitForTimeout(150);
-    ok(`${eng} v3: a wrong file is refused`, /not a Cycle backup/.test(await q.textContent('#toast')) && !(await q.isVisible('form[data-form=import-new]')));
+    await q.setInputFiles('input[data-act=import-pick]', file('notes.json', '{"hello":1}'));
+    ok(`${eng} v3: a wrong file is refused`, (await until(q, () => /not a Cycle backup/.test(document.querySelector('#toast').textContent))) && !(await q.isVisible('form[data-form=import-new]')));
     await q.setInputFiles('input[data-act=import-pick]', file('b.json', backup(PERIODS))); await q.waitForSelector('form[data-form=import-new]');
     ok(`${eng} v3: preview before anything is stored`, /3 periods, from 24 Jun 2026 to 24 Aug 2026/.test(await q.textContent('.notice')) && (await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('cycle-wellness'); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').count(); g.onsuccess = () => res(g.result); }; }))) === 0);
     await q.fill('input[name=p1]', PASS); await q.fill('input[name=p2]', PASS); await q.check('input[name=saved]'); await q.click('form[data-form=import-new] button:not(.pw-eye)');
@@ -139,8 +144,8 @@ for (const eng of want) {
     ok(`${eng} v3: vault file with a wrong passphrase stays closed`, await q.isVisible('#sheet form[data-form=import-open]'));
     await q.fill('#sheet input[name=p]', PASS); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForSelector('#sheet [data-act=import-confirm]', { timeout: 15000 });
     ok(`${eng} v3: vault preview`, /1 period, from 25 May 2026 to 25 May 2026/.test(await q.textContent('#sheet')));
-    await q.click('#sheet [data-act=import-confirm]'); await q.waitForTimeout(200);
-    ok(`${eng} v3: vault import merged`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 4);
+    await q.click('#sheet [data-act=import-confirm]');
+    ok(`${eng} v3: vault import merged`, await until(q, () => window.__cycle.S.data.periods.length === 4));
     // Encrypted export: not readable, and it comes back through the same import path
     const [dl] = await Promise.all([q.waitForEvent('download'), q.click('[data-act=export-enc]')]);
     const encText = fs.readFileSync(await dl.path(), 'utf8');
@@ -155,14 +160,14 @@ for (const eng of want) {
     // Look: appearance, theme, companion, cards, one-time note
     await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: companion note shown once`, await q.isVisible('.companion-note'));
-    await q.click('[data-act=note-seen]'); await q.waitForTimeout(250); ok(`${eng} v3: companion note dismissed`, !(await q.isVisible('.companion-note')));
+    await q.click('[data-act=note-seen]'); ok(`${eng} v3: companion note dismissed`, await until(q, () => !document.querySelector('.companion-note')));
     await q.click('.tabs [data-tab=settings]');
-    await q.click('[data-act=look-mode][data-v=dark]'); await q.waitForTimeout(250); await q.click('[data-act=look-theme][data-v=petal]'); await q.waitForTimeout(250);
+    await q.click('[data-act=look-mode][data-v=dark]'); await lookIs(q, { mode: 'dark' }); await q.click('[data-act=look-theme][data-v=petal]'); await lookIs(q, { mode: 'dark', theme: 'petal' });
     const lk = await q.evaluate(() => { const cs = getComputedStyle(document.documentElement); return { mode: document.documentElement.dataset.mode, bg: cs.getPropertyValue('--bg').trim(), h1: cs.getPropertyValue('--h1').trim(), body: getComputedStyle(document.body).backgroundColor }; });
     ok(`${eng} v3: forced dark with Petal`, lk.mode === 'dark' && lk.bg === '#000000' && lk.h1 === '#8C2E52' && lk.body === 'rgb(0, 0, 0)', JSON.stringify(lk));
-    await q.click('[data-act=look-companion][data-v=sprout]'); await q.waitForTimeout(250); await q.click('.tabs [data-tab=today]');
+    await q.click('[data-act=look-companion][data-v=sprout]'); await lookIs(q, { companion: 'sprout' }); await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: sprout companion`, (await q.getAttribute('.companion', 'data-stage')).startsWith('sprout-'));
-    await q.click('.tabs [data-tab=settings]'); await q.click('[data-act=look-companion][data-v=off]'); await q.waitForTimeout(250); await q.click('label.switch:has([data-k=week]) input'); await q.waitForTimeout(250); await q.click('label.switch:has([data-k=food]) input'); await q.waitForTimeout(250);
+    await q.click('.tabs [data-tab=settings]'); await q.click('[data-act=look-companion][data-v=off]'); await lookIs(q, { companion: 'off' }); await q.click('label.switch:has([data-k=week]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.week === false); await q.click('label.switch:has([data-k=food]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.food === false);
     await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: companion off and cards hidden`, !(await q.isVisible('.companion')) && !(await q.isVisible('.week')) && !(await q.isVisible('.food-teaser')));
     ok(`${eng} v3: look is stored in the encrypted data`, (await q.evaluate(() => window.__cycle.S.data.settings.look.theme)) === 'petal');
@@ -173,5 +178,5 @@ for (const eng of want) {
   await browser.close();
 }
 server.close();
-if (errors.length) { fail += errors.length; console.log('PAGE ERRORS', errors); }
+if (errors.length) { fail += errors.length; console.log('PAGE ERRORS', errors); if (CI) for (const e of errors) console.log(`::error::PAGE ERROR ${e.slice(0, 300)}`); }
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
