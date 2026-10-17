@@ -48,4 +48,18 @@ const ids = (fl) => fl.map((f) => f.id.split('@')[0]);
 }
 // P5: no country-specific wording left in the rules
 { const fs = await import('fs'); const src = fs.readFileSync(new URL('../rules.js', import.meta.url), 'utf8'); eq('no euro coin or fixed helpline in rules.js', /euro|0800/.test(src), false); }
+
+// v4 (R8): late period check result
+{
+  const ok = (n, c) => eq(n, !!c, true);
+  const { lateResult } = await import('../rules.js');
+  const a = lateResult({ preg: 'no', changes: [], signs: [] });
+  ok('R8: urgent warnings shown even when pregnancy is ruled out', a.urgent.length === 2);
+  ok('R8: no pregnancy test step when ruled out', !a.steps.some((x) => /pregnancy test/.test(x)));
+  const b = lateResult({ preg: 'unsure', changes: ['stress', 'contra'], signs: ['hair'] }, 46);
+  ok('R8: not sure keeps pregnancy as a reason and a test as the first step', b.reasons[0].code === 'preg' && /pregnancy test/.test(b.steps[0]));
+  ok('R8: chosen changes become reasons in order', b.reasons.map((r) => r.code).join() === 'preg,stress,contra,signs');
+  ok('R8: other signs suggest a doctor', b.seeDoctorNow && b.steps.some((x) => /doctor/.test(x)));
+  ok('R8: perimenopause comes first from 40', /Perimenopause/.test(b.other[0]) && !/Perimenopause/.test(lateResult({}, 30).other[0]));
+}
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

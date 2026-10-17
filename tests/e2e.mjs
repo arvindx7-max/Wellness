@@ -35,6 +35,8 @@ const lookIs = (p, want) => until(p, (w) => { const l = (window.__cycle.S.data.s
   return Object.entries(w).every(([k, v]) => { const b = document.querySelector(`[data-act=look-${k}][data-v="${v}"]`); return l[k] === v && !!b && b.getAttribute('aria-pressed') === 'true'; }); }, want);
 
 // CI fix: a slow start-up is tried once more on a clean page before it counts as a failure (WebKit on shared runners)
+// v4: Settings is a list of pages
+async function goSet(p, page) { await p.click('.tabs [data-tab=settings]'); await p.click(`[data-act=set-page][data-v=${page}]`); }
 async function setup(p) {
   try { await setupOnce(p); } catch (e) {
     if (!/Timeout/.test(String(e.message))) throw e;
@@ -45,7 +47,7 @@ async function setup(p) {
 async function setupOnce(p) {
   await p.click('[data-act=start]');
   await p.fill('input[name=last]', LAST); await p.fill('input[name=usualCycle]', '30');
-  await p.check('input[name=ageBand][value="26-41"]'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
+  await p.fill('input[name=birthYear]', '1990'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
   await p.click('form[data-form=onboard] button:not(.pw-eye)');
   await p.fill('input[name=p1]', PASS); await p.fill('input[name=p2]', PASS); await p.check('input[name=saved]');
   await p.click('form[data-form=passphrase] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 90000 });
@@ -120,11 +122,11 @@ for (const eng of want) {
   await p.goto(BASE); await setup(p);
   const st = await p.evaluate(() => window.__cycle.S.pred);
   ok(`${eng} flows: 3 past periods give Medium confidence`, st.confidence === 'Medium', st.confidence);
-  await p.click('.tabs [data-tab=settings]'); await p.click('[data-act=lock-now]');
+  await goSet(p, 'privacy'); await p.click('[data-act=lock-now]');
   await p.fill('form[data-form=unlock] input[name=p]', 'wrong-passphrase'); await p.click('form[data-form=unlock] button:not(.pw-eye)'); await p.waitForTimeout(1500);
   ok(`${eng} flows: wrong passphrase stays locked`, (await p.evaluate(() => window.__cycle.S.view)) === 'locked');
   await p.fill('form[data-form=unlock] input[name=p]', PASS); await p.click('form[data-form=unlock] button:not(.pw-eye)'); await p.waitForSelector('main.screen', { timeout: 45000 });
-  await p.click('.tabs [data-tab=settings]'); await p.fill('form[data-form=helpline] input[name=name]', LINE.name); await p.fill('form[data-form=helpline] input[name=number]', LINE.number);
+  await goSet(p, 'cycle'); await p.fill('form[data-form=helpline] input[name=name]', LINE.name); await p.fill('form[data-form=helpline] input[name=number]', LINE.number);
   await p.click('form[data-form=helpline] button'); await p.waitForTimeout(200);
   for (const d of ['2026-10-01', '2026-10-02', '2026-10-03']) {
     await p.click('.tabs [data-tab=calendar]'); await p.click(`[data-date="${d}"]`); await p.click('#sheet [data-act=checkin]');
@@ -159,7 +161,7 @@ for (const eng of want) {
     // Settings import with a Drive vault file: asks for the vault passphrase, then previews
     const vault = await q.evaluate(async (pass) => { const K = await import('./crypto.js'); const C = await import('./cloud.js'); const salt = K.newSalt(); const key = await K.deriveKey(pass, salt);
       return C.sealVault({ app: 'cycle', v: 1, settings: { updatedAt: 1 }, periods: [{ id: 'v1', start: '2026-05-25', end: '2026-05-29', updatedAt: 1 }], days: {}, checkins: {}, acks: {} }, key, salt, K.ITER); }, PASS);
-    await q.click('.tabs [data-tab=settings]');
+    await goSet(q, 'backup');
     await q.setInputFiles('input[data-act=import-json]', file('cycle-vault.json', vault)); await q.waitForSelector('#sheet form[data-form=import-open]');
     await q.fill('#sheet input[name=p]', 'wrong-passphrase'); await q.click('#sheet form[data-form=import-open] button:not(.pw-eye)'); await q.waitForTimeout(1500);
     ok(`${eng} v3: vault file with a wrong passphrase stays closed`, await q.isVisible('#sheet form[data-form=import-open]'));
@@ -182,13 +184,13 @@ for (const eng of want) {
     await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: companion note shown once`, await q.isVisible('.companion-note'));
     await q.click('[data-act=note-seen]'); ok(`${eng} v3: companion note dismissed`, await until(q, () => !document.querySelector('.companion-note')));
-    await q.click('.tabs [data-tab=settings]');
+    await goSet(q, 'look');
     await q.click('[data-act=look-mode][data-v=dark]'); await lookIs(q, { mode: 'dark' }); await q.click('[data-act=look-theme][data-v=petal]'); await lookIs(q, { mode: 'dark', theme: 'petal' });
     const lk = await q.evaluate(() => { const cs = getComputedStyle(document.documentElement); return { mode: document.documentElement.dataset.mode, bg: cs.getPropertyValue('--bg').trim(), h1: cs.getPropertyValue('--h1').trim(), body: getComputedStyle(document.body).backgroundColor }; });
     ok(`${eng} v3: forced dark with Petal`, lk.mode === 'dark' && lk.bg === '#000000' && lk.h1 === '#8C2E52' && lk.body === 'rgb(0, 0, 0)', JSON.stringify(lk));
     await q.click('[data-act=look-companion][data-v=sprout]'); await lookIs(q, { companion: 'sprout' }); await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: sprout companion`, (await q.getAttribute('.companion', 'data-stage')).startsWith('sprout-'));
-    await q.click('.tabs [data-tab=settings]'); await q.click('[data-act=look-companion][data-v=off]'); await lookIs(q, { companion: 'off' }); await q.click('label.switch:has([data-k=week]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.week === false); await q.click('label.switch:has([data-k=food]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.food === false);
+    await goSet(q, 'look'); await q.click('[data-act=look-companion][data-v=off]'); await lookIs(q, { companion: 'off' }); await q.click('label.switch:has([data-k=week]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.week === false); await q.click('label.switch:has([data-k=food]) input'); await until(q, () => window.__cycle.S.data.settings.look.cards.food === false);
     await q.click('.tabs [data-tab=today]');
     ok(`${eng} v3: companion off and cards hidden`, !(await q.isVisible('.companion')) && !(await q.isVisible('.week')) && !(await q.isVisible('.food-teaser')));
     ok(`${eng} v3: look is stored in the encrypted data`, (await q.evaluate(() => window.__cycle.S.data.settings.look.theme)) === 'petal');
@@ -264,7 +266,7 @@ for (const eng of want) {
     ok(`${eng} v3.1: pasted start keeps 3 periods`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 3);
 
     // B7 in Settings: PDF, CSV, scan, month/day choice, paste
-    await q.click('[data-tab=settings]');
+    await goSet(q, 'backup');
     ok(`${eng} v3.1: Settings import also offers PDF and has a Paste dates button`, /pdf/.test(await q.getAttribute('input[data-act=import-json]', 'accept')) && (await q.isVisible('[data-act=paste-open]')));
     await q.setInputFiles('input[data-act=import-json]', upload('report.pdf', 'application/pdf', pdfBytes(['Cycle report', 'Period history', '29 Jun 2026 - 02 Jul 2026', '25 May 2026 - 29 May 2026', '25 Jun 2026', 'Ovulation 12 Jul 2026'])));
     const pdfRead = await q.waitForSelector('#sheet .irow', { timeout: 30000 }).then(() => true, () => false);
@@ -296,7 +298,7 @@ for (const eng of want) {
     await q.click('#sheet [data-act=import-reset]');
 
     // ---- v3.2: report PDF (B9), replace list, zoom lock (B12), bar colour (B13), no redraw while typing (B14) ----
-    await q.click('[data-tab=settings]');
+    await goSet(q, 'backup');
     await q.setInputFiles('input[data-act=import-json]', upload('report.pdf', 'application/pdf', pdfBytes(['Cycle report', 'History', '24/06 - 23/07 5 Days 30 Days', '24/07 - 23/08 5 Days 31 Days', '24/08 - 22/09 5 Days 30 Days', 'Jun 24 Jun 25 Jun 26 Jun 27', '24/06 - 23/07 (30 Days) Next 25/07'])));
     await q.waitForSelector('#sheet .irow', { timeout: 30000 });
     ok(`${eng} v3.2: report rows are read from the history table only`, (await rowsOf(q, '#sheet')).join() === '2026-06-24>2026-06-28,2026-07-24>2026-07-28,2026-08-24>2026-08-28', (await rowsOf(q, '#sheet')).join());
@@ -310,13 +312,13 @@ for (const eng of want) {
     await q.click('#sheet [data-act=import-confirm]');
     ok(`${eng} v3.2: the list replaced the periods (unticked row left out, old ones kept as deletions)`, await until(q, () => { const a = window.__cycle.S.data.periods; return a.filter((p) => !p.deleted).map((p) => p.start).sort().join() === '2026-06-24,2026-07-24' && a.filter((p) => p.deleted).length === 4; }));
     ok(`${eng} v3.2: zoom is locked`, /user-scalable=no/.test(await q.getAttribute('meta[name=viewport]', 'content')) && (await q.evaluate(() => getComputedStyle(document.body).touchAction)) === 'manipulation');
-    await q.click('[data-act=look-mode][data-v=dark]');
+    await goSet(q, 'look'); await q.click('[data-act=look-mode][data-v=dark]');
     ok(`${eng} v3.2: the browser bar colour follows Dark`, await until(q, () => document.getElementById('tc-dark').content === '#000000' && !document.getElementById('tc-light').hasAttribute('media') && document.getElementById('tc-light').content === '#000000'));
     await q.click('[data-act=look-mode][data-v=light]');
     ok(`${eng} v3.2: the browser bar colour follows Light`, await until(q, () => document.getElementById('tc-dark').content === '#F2F2F7' && !document.getElementById('tc-dark').hasAttribute('media')));
     await q.click('[data-act=look-mode][data-v=auto]');
     ok(`${eng} v3.2: Automatic gives the choice back to the phone`, await until(q, () => document.getElementById('tc-dark').getAttribute('media') === '(prefers-color-scheme: dark)'));
-    await q.click('[data-act=paste-open]'); await q.fill('#sheet textarea[name=text]', 'dummy_metric_A typed text'); await q.focus('#sheet textarea[name=text]');
+    await goSet(q, 'backup'); await q.click('[data-act=paste-open]'); await q.fill('#sheet textarea[name=text]', 'dummy_metric_A typed text'); await q.focus('#sheet textarea[name=text]');
     await q.evaluate(() => window.__cycle.softRender());
     ok(`${eng} v3.2: a background refresh does not wipe a form that is being filled`, (await q.inputValue('#sheet textarea[name=text]')) === 'dummy_metric_A typed text' && await q.evaluate(() => window.__cycle.S.redrawLater === true));
     await q.click('#sheet .sheet-card button[data-act=close-sheet]');
@@ -331,7 +333,7 @@ for (const eng of want) {
       out.creates = creates; Object.defineProperty(navigator, 'credentials', { value: real, configurable: true }); return out;
     });
     ok(`${eng} v3.2: Face ID setup refused once asks for a tap, the next try finishes it without a second passkey`, fid.first && fid.first.retry && /click or tap anywhere/.test(fid.first.msg) && fid.second === true && fid.creates === 1, JSON.stringify(fid));
-    await q.click('[data-tab=settings]');
+    await goSet(q, 'cycle');
     ok(`${eng} v3.2: a held-back redraw is done when the field loses focus (I3)`, await q.evaluate(async () => {
       const c = window.__cycle; const f = document.querySelector('#app input:not([type=checkbox]):not([type=radio]):not([type=file]), #app textarea');
       if (!f) return true; f.focus(); c.softRender(); const held = c.S.redrawLater === true; f.blur();

@@ -9,6 +9,9 @@ export const SRC = {
   cdcHmb: { name: 'CDC: Heavy menstrual bleeding', url: 'https://cdc.gov/female-blood-disorders/about/heavy-menstrual-bleeding.html' },
   nihIron: { name: 'NIH Office of Dietary Supplements: Iron', url: 'https://ods.od.nih.gov/factsheets/Iron-HealthProfessional/' },
   figo: { name: 'FIGO 2018 (Munro et al.)', url: 'https://obgyn.onlinelibrary.wiley.com/doi/10.1002/ijgo.12666' },
+  nhsMissed: { name: 'NHS: Stopped or missed periods', url: 'https://www.nhs.uk/conditions/stopped-or-missed-periods/' },
+  nhsEctopic: { name: 'NHS: Ectopic pregnancy', url: 'https://www.nhs.uk/conditions/ectopic-pregnancy/' },
+  bull2019: { name: 'Bull et al. 2019: 600,000 menstrual cycles', url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC6710244' },
 };
 
 // Symptom catalogue (spec 6.1). Severity 1 = mild, 2 = moderate (disrupts the day), 3 = severe (stops normal activities).
@@ -118,3 +121,37 @@ export const PHASE_INFO = {
 export const DIETS = [['all', 'Everything'], ['noRedMeat', 'No red meat'], ['pescatarian', 'Fish, no meat'], ['vegetarian', 'Vegetarian']];
 const HIDE = { all: [], noRedMeat: ['redmeat'], pescatarian: ['redmeat', 'poultry'], vegetarian: ['redmeat', 'poultry', 'fish'] };
 export const dietFilter = (groups, diet) => groups.map((g) => ({ ...g, items: g.items.filter((it) => !(HIDE[diet] || []).includes(it[2])) })).filter((g) => g.items.length);
+
+// v4 (R8): late period check. Content follows the NHS pages "Stopped or missed periods" and "Ectopic pregnancy".
+export const LATE_CHANGES = [
+  ['stress', 'Stress', 'Stress can delay a period.'],
+  ['ill', 'Illness', 'Being ill can delay a period.'],
+  ['travel', 'Travel or night shifts', 'Travel across time zones or night shifts can shift a cycle.'],
+  ['weight', 'Weight loss or gain', 'Sudden weight loss, or being overweight, can stop periods.'],
+  ['exercise', 'Much more exercise', 'Doing a lot more exercise can stop periods.'],
+  ['contra', 'Started or stopped contraception', 'Starting or stopping hormonal contraception can change bleeding for a few months.'],
+  ['feeding', 'Breastfeeding or recent birth', 'Breastfeeding and the months after a birth often pause periods.'],
+  ['meds', 'New medicine', 'Some medicines can change the cycle. Ask the pharmacist or doctor who prescribed it.'],
+];
+export const LATE_SIGNS = [['weight', 'Weight gain or loss'], ['tired', 'Tiredness'], ['hair', 'New facial or body hair'], ['skin', 'Dry or oily skin']];
+export const LATE_OTHER = [
+  'Perimenopause, the years before menopause, usually between 45 and 55.',
+  'An overactive or underactive thyroid.',
+  'PMOS (polycystic ovary syndrome, formerly PCOS).',
+];
+export const LATE_DOCTOR = ['you have missed 3 periods in a row', 'you also notice weight change, tiredness, new facial hair, or dry or oily skin', 'your periods have become irregular'];
+export const LATE_URGENT = { today: 'Get advice today if you might be pregnant (even without a positive test) and have pain low on one side of the tummy, bleeding or shoulder-tip pain.',
+  now: 'Call emergency services for sudden sharp tummy pain with dizziness or fainting.' };
+
+// v4 (U4): the Guide collects the longer explanations; every ⓘ button opens one entry. Neutral wording only.
+export const GUIDE = [
+  ['estimate', 'How the next period is estimated', 'From the average of up to your last 6 cycles. The range around it widens when your cycles vary more. With fewer than 3 cycles logged, the usual lengths you entered help.', 'bull2019'],
+  ['fertile', 'What fertile days mean', 'The days when pregnancy is most likely: from about 5 days before ovulation to 1 day after it. They are estimated from your cycle lengths, so they are never exact.', 'bull2019'],
+  ['safe', 'Why no day is ever "safe"', 'Ovulation moves from cycle to cycle. A day marked low can still lead to pregnancy, so Cycle never calls a day safe and is not a method of birth control.', 'figo'],
+  ['companion', 'The moon and the sprout', 'They show where you are in your cycle, not whether pregnancy is possible. Any day can carry a chance of pregnancy.', ''],
+  ['tests', 'Ovulation tests', 'A Positive or Peak test means ovulation is likely in the next 1 to 2 days. Cycle then sharpens this cycle\'s estimate; the fertile days never start later than before.', ''],
+  ['lengths', 'Your usual lengths and age', 'Usual lengths only help until 3 cycles are logged. Your year of birth is used for notes that depend on age, such as cycles becoming less regular after 40; it does not change the predictions.', 'bull2019'],
+  ['late', 'When a period is late', 'Stress, illness, travel, weight change, exercise, contraception and pregnancy are common reasons. The late period check on Today goes through them with you.', 'nhsMissed'],
+  ['privacy', 'Your data and privacy', 'Everything is encrypted on this device with your passphrase. With sync on, only an encrypted file goes to your own Google Drive. Nobody else, including the makers of Cycle, can read it.', ''],
+  ['sync', 'Google Drive sync and backups', 'Use the same Google account on every device. An encrypted backup opens only with your passphrase; a plain backup can be read by anyone who has the file.', ''],
+];
