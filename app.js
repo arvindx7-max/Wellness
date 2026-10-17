@@ -1,4 +1,4 @@
-// Cycle — v3 (backup start B6, wider range R1, history import FR-26, new look U2). Spec v0.3: FR-01–FR-17, FR-26, FR-27, FR-29; NFR-01–NFR-13.
+// Cycle — v3.1 (flexible import B7, clearer restore B8). v3: backup start B6, wider range R1, history import FR-26, new look U2. Spec v0.3: FR-01–FR-17, FR-26, FR-27, FR-29; NFR-01–NFR-13.
 import { predict, dayInfo, addDays, diff, localToday, livePeriods, periodLength, cycles, isDate, CONST } from './engine.js';
 import * as K from './crypto.js';
 import * as Lock from './lock.js';
@@ -7,8 +7,9 @@ import * as T from './content.js';
 import { evaluate, recsFor, heavyDays } from './rules.js';
 import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
+import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v3';
+export const VERSION = 'v3.1';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -177,7 +178,17 @@ function restoreView() {
   const st = S.restore || {};
   let body;
   if (!st.token) body = `<p class="lede">Sign in with the Google account where Cycle keeps its encrypted vault.</p><button class="btn primary wide" data-act="restore-signin">Sign in with Google</button>`;
-  else if (!st.fileId) body = `<p class="lede">No Cycle vault was found in this Google account. Set Cycle up on the other device first, with sync turned on.</p><button class="btn wide" data-act="restore-retry">Search again</button>`;
+  else if (!st.fileId) body = `<div class="notice"><p><strong>No Cycle vault was found in this Google account.</strong></p>
+      <p class="fine">A vault exists only after Cycle sync has been turned on once, on a device that already has your data. Until then there is nothing to restore.</p></div>
+    <h2>To create the vault</h2>
+    <ol class="steps"><li>${S.meta ? 'Tap <strong>Back</strong>, then <strong>Start again from a backup file</strong>.' : 'Tap <strong>Set up on this phone</strong> below (or <strong>Start from a backup file</strong> if you have one).'}</li>
+      <li>When Cycle is open, tap <strong>Settings</strong>, then find <strong>Google Drive sync</strong>.</li>
+      <li>Tap <strong>Sign in with Google</strong>, then <strong>Create vault</strong>.</li>
+      <li>On any other device, tap <strong>Restore from Google Drive</strong>.</li></ol>
+    ${S.meta ? '' : '<button class="btn primary wide" data-act="start">Set up on this phone</button>'}
+    <button class="btn wide" data-act="import-start">Start from a backup file</button>
+    <p class="fine">Signed in with the wrong Google account? Tap Back, then Restore from Google Drive, and choose the other account.</p>
+    <button class="btn small" data-act="restore-retry">Search again</button>`;
   else body = `<p class="lede">Vault found. Enter its passphrase to bring your data to this device.</p>
     <form class="stack" data-form="restore">${USER}${pw('p', 'Vault passphrase', 'current-password', true, 0)}<button class="btn primary wide">Unlock and restore</button></form>
     ${S.meta ? '<p class="fine">This replaces the Cycle data on this device with the data from the vault.</p>' : ''}`;
@@ -193,10 +204,49 @@ function forgotView() {
     <button class="btn danger wide" data-act="erase-start">Erase Cycle on this device and start over</button><p class="fine">Removes only Cycle's data on this device. Other apps on this device and your Google Drive are not touched.</p>
     <button class="link" data-act="back-locked">Back</button></section>`;
 }
+const PICK = 'application/json,.json,application/pdf,.pdf,text/csv,.csv,text/plain,.txt';
+const pasteForm = () => `<form class="stack" data-form="import-paste"><textarea name="text" rows="5" required placeholder="For example: 2026-06-24 to 2026-06-28" aria-label="Dates to find"></textarea><button class="btn wide">Find dates</button></form>`;
+const pasteSteps = () => `<ol class="steps"><li>In the other app or file, select the dates and tap <strong>Copy</strong>.</li><li>Tap the box below and choose <strong>Paste</strong>.</li><li>Tap <strong>Find dates</strong>.</li></ol>`;
+function importPicker() {
+  return `<ol class="steps"><li>Tap <strong>Choose a file</strong> and pick a Cycle backup, a PDF, a CSV or a text file. A file from your Google Drive vault also works.</li>
+      <li>Check the periods Cycle found. Fix or remove any that are wrong.</li>
+      <li>Choose a new passphrase. Cycle then stores everything encrypted on this device.</li></ol>
+    <label class="btn primary file wide">Choose a file<input type="file" accept="${PICK}" data-act="import-pick" hidden></label>
+    <p class="fine">Files are read on this device. Nothing is uploaded. A scanned PDF (a photo of a page) has no text to read; use Paste dates for that.</p>
+    <h2>Or paste dates</h2>${pasteSteps()}${pasteForm()}`;
+}
+// B7: dates found in a PDF, CSV or text, shown as a list to check before anything is stored
+const closeToPrev = (rows, i) => { const a = rows[i - 1], b = rows[i]; return !!(a && isDate(a.start) && isDate(b.start) && diff(b.start, a.start) >= 0 && diff(b.start, a.start) < 15); };
+const CLOSE_NOTE = '<p class="fine warn">Less than 15 days after the row above. Remove it if it is the same period.</p>';
+// I2: after a date is edited, the notes are updated in place (a redraw would drop the keyboard focus)
+function refreshCloseNotes() {
+  document.querySelectorAll('.irow').forEach((li, i) => {
+    const has = li.querySelector('.warn'), want = S.imp && S.imp.rows && closeToPrev(S.imp.rows, i);
+    if (want && !has) li.insertAdjacentHTML('beforeend', CLOSE_NOTE); else if (!want && has) has.remove();
+  });
+}
+function reviewBody() {
+  const m = S.imp; const inPage = S.view === 'import';
+  const rows = m.rows.map((r, i) => {
+    const close = closeToPrev(m.rows, i);
+    return `<li class="irow"><label>Start<input type="date" name="s${i}" value="${h(r.start)}" max="${today()}" data-act="row-start" data-i="${i}"></label>
+      <label>End (optional)<input type="date" name="e${i}" value="${h(r.end)}" max="${today()}" data-act="row-end" data-i="${i}"></label>
+      <button type="button" class="link" data-act="row-del" data-i="${i}" aria-label="Remove this period">Remove</button>
+      ${close ? CLOSE_NOTE : ''}</li>`;
+  }).join('');
+  return `<div class="notice"><p><strong>${plural(m.rows.length, 'period')} found</strong> in ${h(m.source)}.</p>
+      <p class="fine">Nothing is stored yet. The list is a suggestion: dates in other apps are laid out differently, so look at every row.</p></div>
+    <ol class="steps"><li>Check each Start and End date. Tap a date to change it.</li><li>Tap <strong>Remove</strong> on rows that are not a period.</li><li>Tap <strong>Add a period</strong> for any that are missing.</li><li>Tap <strong>${inPage ? 'Continue' : 'Next'}</strong>.</li></ol>
+    ${m.ambiguous ? `<p class="fine">Dates such as 05/06/2026 can be read two ways. Cycle read them as ${m.order === 'mdy' ? 'month/day' : 'day/month'}. <button class="btn small" data-act="import-order" data-order="${m.order === 'mdy' ? 'dmy' : 'mdy'}">Read as ${m.order === 'mdy' ? 'day/month' : 'month/day'} instead</button> (this starts the list again)</p>` : ''}
+    ${m.skipped ? `<p class="fine">${plural(m.skipped, 'date')} without a year or with an impossible day ${m.skipped === 1 ? 'was' : 'were'} skipped.</p>` : ''}
+    <ul class="irows">${rows}</ul>
+    <div class="stack-btns"><button class="btn" data-act="row-add">Add a period</button><button class="btn primary" data-act="review-continue">${inPage ? 'Continue' : 'Next'}</button>
+      <button class="btn" data-act="import-reset">${inPage ? 'Choose another file' : 'Cancel'}</button></div>`;
+}
 function importView() {
   const m = S.imp; let body;
-  if (!m) body = `<p class="lede">Choose a backup you exported from Cycle, or the ${h(C.VAULT_NAME)} file from your Google Drive.</p>
-    <label class="btn primary file wide">Choose a file<input type="file" accept="application/json,.json" data-act="import-pick" hidden></label>`;
+  if (!m) body = importPicker();
+  else if (m.kind === 'found') body = reviewBody();
   else if (m.kind === 'vault' && !m.data) body = vaultOpenForm();
   else body = `<div class="notice"><p><strong>${h(backupSummary(m.data))}</strong></p><p class="fine">Nothing is stored yet. Choose a passphrase to encrypt it on this device.</p></div>
     <form class="stack" data-form="import-new">${USER}
@@ -209,14 +259,26 @@ function importView() {
 }
 const vaultOpenForm = () => `<p class="lede">This file is encrypted: an encrypted backup or a Google Drive vault file. Enter the passphrase it was made with to read it.</p>
   <form class="stack" data-form="import-open">${USER}${pw('p', 'Passphrase of this file', 'current-password', true, 0)}<button class="btn primary wide">Open the file</button></form>`;
-// FR-26: read a chosen file. A Cycle backup is plain JSON; a Drive vault file is encrypted and needs its passphrase first.
+// FR-26 + B7: read a chosen file. A Cycle backup is plain JSON; a Drive vault file is encrypted and needs its passphrase first;
+// a PDF, CSV or text file from another app is searched for period dates, which the person then checks.
 async function readBackup(file) {
-  const text = await file.text(); let obj = null;
-  try { obj = JSON.parse(text); } catch { /* handled below */ }
+  const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf'; let text;
+  if (isPdf) {
+    try { text = await pdfToText(await file.arrayBuffer()); } catch { throw new Error('This PDF could not be read. Tap Back, then use Paste dates.'); }
+    if (text.replace(/\s/g, '').length < 20) throw new Error('This PDF has no readable text, so it may be a scan. Use Paste dates instead.');
+  } else text = await file.text();
+  let obj = null;
+  if (!isPdf) { try { obj = JSON.parse(text); } catch { /* not JSON: searched for dates below */ } }
   const okPeriods = (d) => d && d.app === 'cycle' && Array.isArray(d.periods) && d.periods.every((x) => x && typeof x === 'object' && isDate(x.start));
   if (okPeriods(obj)) return { kind: 'plain', data: obj };
   if (obj && obj.app === 'cycle-wellness-vault') return { kind: 'vault', head: C.vaultHeader(text), text };
-  throw new Error('This file is not a Cycle backup.');
+  if (obj && typeof obj === 'object') throw new Error('This file is not a Cycle backup. Use Paste dates instead.');
+  return foundFrom(text, file.name);
+}
+function foundFrom(text, source, order) {
+  const r = findPeriods(text, { today: today(), order });
+  if (!r.rows.length) throw new Error('No period dates were found. Use Paste dates and type or paste them in.');
+  return { kind: 'found', text, source, rows: r.rows.map((x) => ({ ...x })), order: r.order, ambiguous: r.ambiguous, skipped: r.skipped };
 }
 // I1: what a file holds, shown before anything is imported
 function backupSummary(d) {
@@ -571,7 +633,8 @@ function settingsView() {
   <section class="card"><h2>Your data</h2>
     <p class="fine">An encrypted backup opens only with the passphrase you use now. A plain backup and the CSV file are readable by anyone who gets them, so keep those somewhere private.</p>
     <div class="row"><button class="btn" data-act="export-enc">Export encrypted backup</button><button class="btn" data-act="export-json">Export plain backup</button><button class="btn" data-act="export-csv">Export periods as CSV</button></div>
-    <label class="btn file">Import a backup<input type="file" accept="application/json,.json" data-act="import-json" hidden></label>
+    <p class="fine">To bring in periods: tap <strong>Import a backup</strong> and choose a Cycle backup, a PDF, a CSV or a text file, or tap <strong>Paste dates</strong>. You check the list before anything is added.</p>
+    <div class="row"><label class="btn file">Import a backup<input type="file" accept="${PICK}" data-act="import-json" hidden></label><button class="btn" data-act="paste-open">Paste dates</button></div>
     <button class="btn danger" data-act="wipe">Delete all data on this device</button></section>
   <section class="card about"><h2>About</h2>
     <p class="fine">Cycle ${VERSION}. A wellness tracker, not medical advice and not a method of birth control. Predictions, suggestions and food lists follow these sources:</p>
@@ -678,10 +741,13 @@ function sheetBody() {
       <p class="fine">Fertile days will be labelled "High" or "Higher chance of pregnancy". No day is ever labelled safe, because a wrong "safe" day can lead to an unplanned pregnancy.</p>
       <div class="stack-btns"><button class="btn primary" data-act="wording-accept">I understand, turn it on</button><button class="btn" data-act="close-sheet">Cancel</button></div>`;
   }
+  if (s.name === 'import-review') return S.imp ? `<h2>Check these periods</h2>${reviewBody()}` : '';
+  if (s.name === 'import-paste') return `<h2>Paste dates</h2>${pasteSteps()}${pasteForm()}<button class="btn wide" data-act="close-sheet">Cancel</button>`;
   if (s.name === 'import-preview') {
     const m = S.imp; if (!m) return '';
     if (m.kind === 'vault' && !m.data) return `<h2>Encrypted file</h2>${vaultOpenForm()}<button class="btn wide" data-act="import-cancel">Cancel</button>`;
     return `<h2>Import this backup?</h2><p><strong>${h(backupSummary(m.data))}.</strong></p>
+      ${m.skippedKnown ? `<p class="fine">${plural(m.skippedKnown, 'period')} already in Cycle (or overlapping one) left out.</p>` : ''}
       <p class="fine">It is merged with the data on this device: for each record, the newest version wins.</p>
       <div class="stack-btns"><button class="btn primary" data-act="import-confirm">Import</button><button class="btn" data-act="import-cancel">Cancel</button></div>`;
   }
@@ -750,6 +816,12 @@ document.addEventListener('click', async (e) => {
     else if (a === 'import-start') { S.imp = null; S.view = 'import'; render(); }
     else if (a === 'import-back') { S.imp = null; S.view = 'welcome'; render(); }
     else if (a === 'import-cancel') { S.imp = null; closeSheet(); }
+    else if (a === 'import-reset') { S.imp = null; if (S.view === 'import') render(); else closeSheet(); }
+    else if (a === 'paste-open') openSheet('import-paste');
+    else if (a === 'row-del') { S.imp.rows.splice(+b.dataset.i, 1); render(); }
+    else if (a === 'row-add') { S.imp.rows.push({ start: '', end: '' }); render(); }
+    else if (a === 'import-order') { const m = S.imp; S.imp = foundFrom(m.text, m.source, b.dataset.order); render(); }
+    else if (a === 'review-continue') reviewContinue();
     else if (a === 'import-confirm') { const inc = S.imp.data; S.imp = null; S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); toast(`Backup imported: ${plural(livePeriods(inc.periods).length, 'period')}`); }
     else if (a === 'look-mode' || a === 'look-theme' || a === 'look-companion') await setLook({ [a.slice(5)]: b.dataset.v });
     else if (a === 'note-seen') await setLook({ noteSeen: true });
@@ -802,6 +874,28 @@ document.addEventListener('click', async (e) => {
     });
   } catch (err) { console.error(err); toast(err.message || 'Something went wrong.'); }
 });
+// B7: the checked list becomes a normal backup; from Settings it is merged (rows already in Cycle are left out), at start-up it needs a passphrase next
+function reviewContinue() {
+  const m = S.imp; const rows = m.rows.filter((r) => r.start || r.end).slice().sort((a, b) => (a.start < b.start ? -1 : 1));
+  if (!rows.length) { toast('Add at least one period.'); return; }
+  for (const r of rows) {
+    if (!isDate(r.start)) { toast('Every row needs a start date.'); return; }
+    if (diff(r.start, today()) > 0 || (r.end && diff(r.end, today()) > 0)) { toast('Dates cannot be in the future.'); return; }
+    if (r.end && (!isDate(r.end) || diff(r.end, r.start) < 0)) { toast('An end date cannot be before its start date.'); return; }
+  }
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1], b = rows[i];
+    if (a.start === b.start || (a.end && diff(b.start, a.end) <= 0)) { toast(`Two rows overlap around ${fmt(b.start, true)}. Remove one.`); return; }
+  }
+  let keep = rows;
+  if (S.view !== 'import') {
+    keep = rows.filter((r) => !overlapping(r.start, r.end || null));
+    if (!keep.length) { toast('All of these periods are already in Cycle.'); return; }
+  }
+  const now = Date.now();
+  S.imp = { kind: 'plain', skippedKnown: rows.length - keep.length, data: { app: 'cycle', v: 1, settings: { updatedAt: 0 }, periods: keep.map((r) => ({ id: uid(), start: r.start, end: r.end || null, updatedAt: now })), days: {}, checkins: {}, acks: {} } };
+  if (S.view === 'import') render(); else openSheet('import-preview');
+}
 document.addEventListener('change', async (e) => {
   const el = e.target;
   if (el.dataset.act === 'wording') {
@@ -809,8 +903,10 @@ document.addEventListener('change', async (e) => {
     else { S.data.settings = { ...S.data.settings, wording: false, updatedAt: Date.now() }; await persist(); render(); toast('Pregnancy-chance wording is off'); }
   } else if (el.dataset.act === 'look-card') {
     const l = look(); await setLook({ cards: { ...l.cards, [el.dataset.k]: el.checked } });
+  } else if ((el.dataset.act === 'row-start' || el.dataset.act === 'row-end') && S.imp && S.imp.rows) {
+    S.imp.rows[+el.dataset.i][el.dataset.act === 'row-start' ? 'start' : 'end'] = el.value; refreshCloseNotes();
   } else if (el.dataset.act === 'import-json' && el.files[0]) {
-    try { S.imp = await readBackup(el.files[0]); openSheet('import-preview'); } catch (err) { toast(err.message); }
+    try { S.imp = await readBackup(el.files[0]); openSheet(S.imp.kind === 'found' ? 'import-review' : 'import-preview'); } catch (err) { toast(err.message); }
     el.value = '';
   } else if (el.dataset.act === 'import-pick' && el.files[0]) {
     try { S.imp = await readBackup(el.files[0]); render(); } catch (err) { toast(err.message); }
@@ -843,6 +939,9 @@ document.addEventListener('submit', async (e) => {
     } else if (kind === 'erase') {
       if ((fd.get('confirm') || '').trim().toUpperCase() !== 'ERASE') { toast('Type ERASE to confirm.'); return; }
       await kvClear(); Object.assign(S, { meta: null, key: null, data: null, pred: null, view: 'welcome', cloud: { token: null, status: 'off', msg: '', busy: false } }); render(); toast('Cycle was erased on this device');
+    } else if (kind === 'import-paste') {
+      S.imp = foundFrom(String(fd.get('text')), 'the pasted text');
+      if (S.view === 'import') render(); else openSheet('import-review');
     } else if (kind === 'import-open') {
       busy(true, 'Opening the file');
       const m = S.imp; const key = await K.deriveKey(fd.get('p'), m.head.salt, m.head.iter);
@@ -1048,4 +1147,4 @@ function csv() {
     }
   });
 })();
-window.__cycle = { S, predict, VERSION };
+window.__cycle = { S, predict, VERSION, render };

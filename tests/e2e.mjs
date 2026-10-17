@@ -178,6 +178,101 @@ for (const eng of want) {
     ok(`${eng} v3: look and imported data are not stored in clear text`, !/petal|sprout|2026-0/.test(sealed2));
     await c2.close();
   }
+
+  // ---- v3.1: flexible import (B7: PDF, CSV, pasted text, review list) and the clearer restore screen (B8) ----
+  {
+    const pdfBytes = (lines) => {
+      const stream = `BT /F1 12 Tf 14 TL 50 780 Td ${lines.map((l) => `(${l.replace(/[\\()]/g, '')}) Tj T*`).join(' ')} ET`;
+      const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`];
+      let out = '%PDF-1.4\n'; const off = [];
+      objs.forEach((o, i) => { off.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+      const x = out.length;
+      out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${off.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF`;
+      return Buffer.from(out, 'latin1');
+    };
+    const upload = (name, mimeType, buffer) => ({ name, mimeType, buffer });
+    const rowsOf = (p, sel) => p.evaluate((s2) => [...document.querySelectorAll(`${s2} .irow`)].map((r) => [r.querySelector('input[data-act=row-start]').value, r.querySelector('input[data-act=row-end]').value].join('>')), sel);
+    const toastText = (p) => p.evaluate(() => document.querySelector('#toast').textContent);
+
+    // B8: restore screen on a first start
+    const c3 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await c3.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
+    const r3 = await c3.newPage(); await r3.clock.install({ time: new Date(NOW) }); r3.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
+    await r3.goto(BASE); await r3.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 });
+    await r3.click('[data-act=restore-start]');
+    await r3.evaluate(() => { window.__cycle.S.restore = { token: 'dummy_token_A' }; window.__cycle.render(); });
+    ok(`${eng} v3.1: no-vault screen explains why`, /No Cycle vault was found/.test(await r3.textContent('.intro')) && /only after Cycle sync has been turned on/.test(await r3.textContent('.intro')));
+    ok(`${eng} v3.1: no-vault screen gives four numbered steps`, (await r3.locator('ol.steps li').count()) === 4);
+    ok(`${eng} v3.1: no-vault screen offers set up and backup start`, (await r3.isVisible('.intro [data-act=start]')) && (await r3.isVisible('.intro [data-act=import-start]')));
+    await r3.click('.intro [data-act=start]');
+    ok(`${eng} v3.1: Set up on this phone starts the questions`, await r3.waitForSelector('form[data-form=onboard]', { timeout: 10000 }).then(() => true, () => false));
+    await c3.close();
+
+    // B7 at start-up: paste, review list, edit, continue
+    const c4 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await c4.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
+    const q = await c4.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
+    const seen = []; q.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') seen.push(m.text().slice(0, 160)); }); q.on('requestfailed', (r) => seen.push(`request failed ${r.url().slice(-40)}`)); q.on('worker', () => seen.push('worker started'));
+    await q.goto(BASE); await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }); await q.click('[data-act=import-start]');
+    const accept = await q.getAttribute('input[data-act=import-pick]', 'accept');
+    ok(`${eng} v3.1: the file picker also offers PDF, CSV and text`, /pdf/.test(accept) && /csv/.test(accept) && /txt/.test(accept) && /json/.test(accept), accept);
+    ok(`${eng} v3.1: picker screen has numbered steps`, (await q.locator('ol.steps li').count()) >= 6);
+    await q.fill('textarea[name=text]', 'hello'); await q.click('form[data-form=import-paste] button');
+    ok(`${eng} v3.1: text without dates is refused with a next step`, (await until(q, () => /No period dates were found/.test(document.querySelector('#toast').textContent))) && !(await q.isVisible('.irow')));
+    await q.fill('textarea[name=text]', '2026-06-24 to 2026-06-28\n2026-07-25 to 2026-07-29\nExported 2026-10-01\n2026-08-24 - 2026-08-28\nOvulation 2026-07-08');
+    await q.click('form[data-form=import-paste] button');
+    await q.waitForSelector('.irow');
+    ok(`${eng} v3.1: pasted dates become a list, exported and ovulation lines left out`, (await rowsOf(q, '.intro')).join() === '2026-06-24>2026-06-28,2026-07-25>2026-07-29,2026-08-24>2026-08-28');
+    ok(`${eng} v3.1: nothing stored while checking`, (await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('cycle-wellness'); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').count(); g.onsuccess = () => res(g.result); }; }))) === 0);
+    await q.locator('.irow input[data-act=row-start]').nth(1).fill('2026-07-01'); await q.locator('.irow input[data-act=row-start]').nth(1).dispatchEvent('change');
+    ok(`${eng} v3.1: the 15-day note appears at once after editing a date (I2)`, await until(q, () => document.querySelectorAll('.irow')[1].querySelector('.warn') !== null));
+    await q.locator('.irow input[data-act=row-start]').nth(1).fill('2026-07-25'); await q.locator('.irow input[data-act=row-start]').nth(1).dispatchEvent('change');
+    ok(`${eng} v3.1: the note goes away when the date is fixed`, await until(q, () => document.querySelectorAll('.irow')[1].querySelector('.warn') === null));
+    await q.click('[data-act=row-del][data-i="1"]');
+    ok(`${eng} v3.1: a row can be removed`, (await q.locator('.irow').count()) === 2);
+    await q.click('[data-act=row-add]'); await q.locator('.irow input[data-act=row-start]').nth(2).fill('2026-05-25');
+    await q.locator('.irow input[data-act=row-end]').nth(2).fill('2026-05-20'); await q.click('[data-act=review-continue]');
+    ok(`${eng} v3.1: an end before the start is refused`, (await until(q, () => /before its start/.test(document.querySelector('#toast').textContent))) && !(await q.isVisible('form[data-form=import-new]')));
+    await q.locator('.irow input[data-act=row-end]').nth(2).fill('2026-05-29'); await q.click('[data-act=review-continue]');
+    await q.waitForSelector('form[data-form=import-new]');
+    ok(`${eng} v3.1: checked list goes on to the passphrase step`, /3 periods, from 25 May 2026 to 24 Aug 2026/.test(await q.textContent('.notice')));
+    await q.fill('input[name=p1]', PASS); await q.fill('input[name=p2]', PASS); await q.check('input[name=saved]'); await q.click('form[data-form=import-new] button:not(.pw-eye)');
+    await q.waitForSelector('main.screen', { timeout: 45000 });
+    ok(`${eng} v3.1: pasted start keeps 3 periods`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 3);
+
+    // B7 in Settings: PDF, CSV, scan, month/day choice, paste
+    await q.click('[data-tab=settings]');
+    ok(`${eng} v3.1: Settings import also offers PDF and has a Paste dates button`, /pdf/.test(await q.getAttribute('input[data-act=import-json]', 'accept')) && (await q.isVisible('[data-act=paste-open]')));
+    await q.setInputFiles('input[data-act=import-json]', upload('report.pdf', 'application/pdf', pdfBytes(['Cycle report', 'Period history', '29 Jun 2026 - 02 Jul 2026', '25 May 2026 - 29 May 2026', '25 Jun 2026', 'Ovulation 12 Jul 2026'])));
+    const pdfRead = await q.waitForSelector('#sheet .irow', { timeout: 30000 }).then(() => true, () => false);
+    ok(`${eng} v3.1: a PDF is read on the device`, pdfRead, `toast: ${await toastText(q)} | console: ${seen.slice(-6).join(' | ')}`);
+    ok(`${eng} v3.1: PDF rows are found in order`, (await rowsOf(q, '#sheet')).join() === '2026-05-25>2026-05-29,2026-06-25>,2026-06-29>2026-07-02', (await rowsOf(q, '#sheet')).join());
+    await q.click('#sheet [data-act=review-continue]');
+    await q.waitForSelector('#sheet [data-act=import-confirm]');
+    ok(`${eng} v3.1: periods already in Cycle are left out`, /1 period, from 29 Jun 2026/.test(await q.textContent('#sheet')) && /2 periods already in Cycle/.test(await q.textContent('#sheet')), await q.textContent('#sheet'));
+    await q.click('#sheet [data-act=import-confirm]');
+    ok(`${eng} v3.1: PDF import merged`, await until(q, () => window.__cycle.S.data.periods.length === 4));
+    // Safari's engine has no stream loop: take it away here and check that the PDF is still read (v3.1 WebKit fix)
+    const noLoop = await q.evaluate(async (bytes) => { delete ReadableStream.prototype[Symbol.asyncIterator]; delete ReadableStream.prototype.values; const { pdfToText } = await import('./importer.js'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdfBytes(['25 May 2026 - 29 May 2026'])]);
+    ok(`${eng} v3.1: a PDF is read without stream looping`, /25 May 2026 - 29 May 2026/.test(noLoop), String(noLoop).slice(0, 100));
+    // fallback: the same PDF read on the main thread (no background worker)
+    const mainThread = await q.evaluate(async (bytes) => { const { pdfToText } = await import('./importer.js'); globalThis.pdfjsWorker = await import('./vendor/pdfjs/pdf.worker.min.mjs'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdfBytes(['25 May 2026 - 29 May 2026'])]);
+    ok(`${eng} v3.1: a PDF is also read on the main thread (fallback)`, /25 May 2026 - 29 May 2026/.test(mainThread), String(mainThread).slice(0, 100));
+    await q.setInputFiles('input[data-act=import-json]', upload('scan.pdf', 'application/pdf', pdfBytes([])));
+    ok(`${eng} v3.1: a PDF without text is refused`, await until(q, () => /no readable text/.test(document.querySelector('#toast').textContent)));
+    await q.setInputFiles('input[data-act=import-json]', upload('periods.csv', 'text/csv', Buffer.from('start,end\n2026-04-25,2026-04-29\n')));
+    await q.waitForSelector('#sheet .irow');
+    ok(`${eng} v3.1: a CSV is read`, (await rowsOf(q, '#sheet')).join() === '2026-04-25>2026-04-29');
+    await q.click('#sheet [data-act=import-reset]');
+    ok(`${eng} v3.1: cancel leaves the data as it was`, (await q.evaluate(() => window.__cycle.S.data.periods.length)) === 4 && !(await q.isVisible('#sheet .irow')));
+    await q.click('[data-act=paste-open]'); await q.fill('#sheet textarea[name=text]', '05/06/2026'); await q.click('#sheet form[data-form=import-paste] button');
+    await q.waitForSelector('#sheet .irow');
+    ok(`${eng} v3.1: day/month is assumed and the other reading is offered`, (await rowsOf(q, '#sheet')).join() === '2026-06-05>' && (await q.isVisible('#sheet [data-act=import-order]')));
+    await q.click('#sheet [data-act=import-order]'); await q.waitForSelector('#sheet .irow');
+    ok(`${eng} v3.1: switching to month/day rereads the list`, (await rowsOf(q, '#sheet')).join() === '2026-05-06>');
+    await q.click('#sheet [data-act=import-reset]');
+    await c4.close();
+  }
   await browser.close();
 }
 } catch (e) {
