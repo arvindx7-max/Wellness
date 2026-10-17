@@ -252,6 +252,9 @@ for (const eng of want) {
     ok(`${eng} v3.1: periods already in Cycle are left out`, /1 period, from 29 Jun 2026/.test(await q.textContent('#sheet')) && /2 periods already in Cycle/.test(await q.textContent('#sheet')), await q.textContent('#sheet'));
     await q.click('#sheet [data-act=import-confirm]');
     ok(`${eng} v3.1: PDF import merged`, await until(q, () => window.__cycle.S.data.periods.length === 4));
+    // Safari's engine has no stream loop: take it away here and check that the PDF is still read (v3.1 WebKit fix)
+    const noLoop = await q.evaluate(async (bytes) => { delete ReadableStream.prototype[Symbol.asyncIterator]; delete ReadableStream.prototype.values; const { pdfToText } = await import('./importer.js'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdfBytes(['25 May 2026 - 29 May 2026'])]);
+    ok(`${eng} v3.1: a PDF is read without stream looping`, /25 May 2026 - 29 May 2026/.test(noLoop), String(noLoop).slice(0, 100));
     // fallback: the same PDF read on the main thread (no background worker)
     const mainThread = await q.evaluate(async (bytes) => { const { pdfToText } = await import('./importer.js'); globalThis.pdfjsWorker = await import('./vendor/pdfjs/pdf.worker.min.mjs'); return pdfToText(new Uint8Array(bytes).buffer); }, [...pdfBytes(['25 May 2026 - 29 May 2026'])]);
     ok(`${eng} v3.1: a PDF is also read on the main thread (fallback)`, /25 May 2026 - 29 May 2026/.test(mainThread), String(mainThread).slice(0, 100));
