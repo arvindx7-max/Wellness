@@ -41,7 +41,15 @@ function sd(a) { // sample standard deviation
 }
 
 // ---------- cycles ----------
-export const livePeriods = (periods) => (periods || []).filter((p) => !p.deleted && isDate(p.start)).sort((a, b) => diff(a.start, b.start));
+// v5 (B20): two records for the same start day count as one period (the one with an end wins), so a duplicate can never make a 0-day cycle
+export function livePeriods(periods) {
+  const out = [];
+  for (const p of (periods || []).filter((x) => !x.deleted && isDate(x.start)).sort((a, b) => diff(a.start, b.start))) {
+    const last = out[out.length - 1];
+    if (last && last.start === p.start) { if (!last.end && p.end) out[out.length - 1] = p; } else out.push(p);
+  }
+  return out;
+}
 
 // D1 (approved 3 Oct): a cycle more than twice as long as the user's other cycles' average is probably a missed
 // period. It is left out of predictions until the user adds the missed period, excludes it, or confirms it.

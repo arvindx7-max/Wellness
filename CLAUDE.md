@@ -66,7 +66,7 @@ Only these clearly fake values may appear in tests, prototypes and examples.
 The change log is private (kept outside this repository).
 
 ## Layout and tests
-- Engine, rules, look, import and sync: `tests/engine.test.mjs`, `tests/rules.test.mjs`, `tests/look.test.mjs`, `tests/importer.test.mjs` (date finder for PDF, CSV and pasted text), `tests/cloud.test.mjs` (per-field sync merge; `npm run test:unit`; the look test checks that every theme is readable, 4.5:1).
+- Engine, rules, look, import and sync: `tests/engine.test.mjs`, `tests/rules.test.mjs`, `tests/look.test.mjs`, `tests/importer.test.mjs` (date finder for PDF, CSV and pasted text), `tests/gesture.test.mjs` (pop-up swipe rules), `tests/cloud.test.mjs` (per-field sync merge and same-start period merge; `npm run test:unit`; the look test checks that every theme is readable, 4.5:1).
 - Browser: `tests/e2e.mjs` at phone 390 × 844, phone landscape 844 × 390 and laptop 1470 × 956, light and dark,
   Chromium and WebKit. Fails on sideways scrolling, a laptop page using less than 80% of the usable width,
   a header readout that does not fit on the first screen, a laptop ring that does not fit, wrong food filtering or unencrypted storage.

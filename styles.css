@@ -80,7 +80,7 @@ fieldset label.choice { display: inline-flex; margin-right: 16px; }
 label.switch { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 17px; min-height: 44px; }
 input[role=switch] { appearance: none; -webkit-appearance: none; width: 51px; height: 31px; border-radius: 999px; background: var(--fill2); position: relative; flex: none; cursor: pointer; transition: background .2s; }
 input[role=switch]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .2s; }
-input[role=switch]:checked { background: var(--green); }
+input[role=switch]:checked { background: var(--accent); }
 input[role=switch]:checked::after { transform: translateX(20px); }
 /* B4: must win over the general input styles, or the hidden field stretches the page sideways */
 .sr-only, input.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; min-height: 0 !important; padding: 0 !important; margin: -1px !important; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0 !important; white-space: nowrap; }
@@ -249,8 +249,8 @@ details .q { margin-top: 12px; }
   .settings-grid > .card { break-inside: avoid; display: inline-block; width: 100%; }
   .screen.tab-calendar { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 24px; align-items: start; }
   .tab-calendar .topbar, .tab-calendar .month-nav, .tab-calendar .cal-grid { grid-column: 1; }
-  .tab-calendar .legend { grid-column: 2; grid-row: 2 / span 2; margin-top: 0; grid-template-columns: 1fr; }
-  .tab-calendar > .fine, .tab-calendar > .link { grid-column: 2; }
+  .tab-calendar .legend { grid-column: 2; grid-row: 3 / span 2; margin-top: 0; grid-template-columns: 1fr; }
+  .tab-calendar > .link { grid-column: 1; }
   .actions { grid-template-columns: 1fr 1fr; }
 }
 /* Short screens (phone landscape): smaller title, tighter top */
@@ -521,3 +521,75 @@ body.typing .tabs, body.sheet-open .tabs { transform: translate(-50%, 160%); opa
 .card details summary::after { content: "▾"; font-size: 13px; } .card details[open] summary::after { content: "▴"; }
 .note.urgent { background: var(--red-tint); box-shadow: var(--edge), inset 4px 0 0 var(--red); }
 .note.urgent strong { color: var(--label); }
+
+
+/* ======================================================================
+   v5 — pop-up swipe and scroll lock (B18), no text selection (B19), Review (U7), motion (U8), Theme and Halloween (U9), switches (U10)
+   ====================================================================== */
+/* B19: buttons, labels and cards are never selected by a long press or a drag. Typing fields stay normal. */
+html, body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+input, textarea, [contenteditable="true"] { -webkit-user-select: text; user-select: text; }
+a { -webkit-touch-callout: default; }
+img, svg { -webkit-user-drag: none; }
+
+/* B18: the page behind a pop-up is pinned (its scroll position is restored by the script when the pop-up closes) */
+body.scroll-locked { position: fixed; left: 0; right: 0; width: 100%; overflow: hidden; }
+html:has(body.scroll-locked) { overscroll-behavior: none; }
+.sheet-card { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+.sheet-scrim { touch-action: none; }
+.sheet-card.dragging { animation: none; transition: none; }
+
+/* U10: switches use the theme colour; the knob stays white, so on/off never depends on colour alone (position and the label also change) */
+input[role=switch]:checked { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-accent) 12%, transparent); }
+label.switch > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+label.switch small { font-size: 13px; line-height: 18px; font-weight: 400; }
+
+/* U7: Review */
+.review-line { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 14px; min-height: 72px; padding: 12px 18px 12px 14px; margin: 0 0 16px; background: var(--cell); border-radius: 28px; box-shadow: var(--edge), var(--lift); order: 1; width: 100%; }
+.review-line:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.rl-n { width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 17px; font-weight: 800; background: color-mix(in srgb, var(--orange) 22%, transparent); color: var(--orange); }
+.rl-t { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; text-align: left; } .rl-t strong { font-size: 17px; } .rl-t .fine { margin: 0; }
+.rl-c { color: var(--label3); font-size: 24px; }
+.sec { font-size: 13px; line-height: 18px; text-transform: uppercase; letter-spacing: .04em; color: var(--label2); margin: 18px 4px 8px; font-weight: 700; }
+.tab-review .note, .tab-review .flag { margin-bottom: 12px; }
+.tab-review .lede { margin: 0 4px 6px; font-size: 15px; }
+details.done { margin: 16px 0 0; } details.done p { font-size: 15px; margin: 10px 0 0; }
+
+/* U9: Theme cards */
+.styles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.style-card { border: 2px solid transparent; background: var(--fill); border-radius: 22px; padding: 10px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 4px; color: var(--label); }
+.style-card i { display: block; height: 54px; border-radius: 14px; margin-bottom: 4px; }
+.style-card strong { font-size: 16px; } .style-card span { font-size: 13px; line-height: 17px; color: var(--label2); }
+.style-card[aria-pressed=true] { border-color: var(--accent); background: var(--accent-tint); }
+.look-card label.switch { margin-top: 12px; }
+
+/* U9: Halloween. Colours come from the script (themes.js); these are the extras. Sketches are decoration only. */
+.decor { display: flex; pointer-events: none; opacity: .88; line-height: 0; }
+.decor.in-bar { margin: 0 8px 0 auto; align-self: center; }
+.screen { position: relative; }
+.decor.corner { position: absolute; right: -6px; bottom: -8px; }
+.card.food-teaser { position: relative; overflow: hidden; }
+.decor.patch { justify-content: center; align-items: flex-end; gap: 6px; padding: 16px 0 4px; }
+.decor.end { justify-content: center; padding: 6px 0 12px; }
+.hero .sky { position: absolute; right: 4px; top: 6px; z-index: 0; pointer-events: none; }
+:root[data-style="halloween"] .hero .big, :root[data-style="halloween"] .topbar h1, :root[data-style="halloween"] .sheet-card h2 { letter-spacing: -0.01em; }
+:root[data-style="halloween"] .card.food-teaser, :root[data-style="halloween"] .card.checkin.focus { box-shadow: var(--edge), var(--lift); }
+:root[data-style="halloween"] .card.checkin.focus { color: var(--coral-ink); }
+
+/* U8: page motion. A page change plays once; the setting (Settings › Look › Motion) decides how. */
+.screen.anim-push { animation: cyPush .38s cubic-bezier(.32, .72, 0, 1); }
+.screen.anim-back { animation: cyBack .38s cubic-bezier(.32, .72, 0, 1); }
+.screen.anim-tab { animation: cyTab .22s ease-out; }
+.screen.anim-fade { animation: fade .2s ease-out; }
+@keyframes cyPush { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes cyBack { from { transform: translateX(-32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes cyTab { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+:root[data-motion="reduced"] .sheet-card { animation: fade .2s ease-out; }
+:root[data-motion="reduced"] .companion { animation: none; }
+:root[data-motion="off"] *:not(.spinner), :root[data-motion="off"] *:not(.spinner)::before, :root[data-motion="off"] *:not(.spinner)::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; }
+@media (prefers-reduced-motion: reduce) { :root[data-motion="full"] .sheet-card { animation: up .28s cubic-bezier(.2, .8, .2, 1); } :root[data-motion="full"] input[role=switch], :root[data-motion="full"] input[role=switch]::after { transition: .2s; } }
+@media (min-width: 1000px) and (prefers-reduced-motion: reduce) { :root[data-motion="full"] .sheet-card { animation: pop .2s ease-out; } }
+@media (min-width: 1000px) { :root[data-motion="reduced"] .sheet-card { animation: fade .2s ease-out; } }
+
+/* B21: the legend note sits inside the legend card, under the symbols, on every width */
+.legend .lg-note { grid-column: 1 / -1; margin: 2px 0 0; padding-top: 10px; border-top: .5px solid var(--sep); }

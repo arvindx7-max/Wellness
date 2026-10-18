@@ -192,6 +192,15 @@ const P = (...starts) => starts.map((s, i) => ({ id: `p${i}`, start: s }));
   eq('D10: pregnancy state instead of late', r.state.id, 'pregnancy');
   eq('D10: no forecasts while paused', r.cycles.length + r.notes.length, 0);
 }
+// v5 (B20): a period saved twice never makes a 0-day cycle
+{
+  const dup = [...P('2026-06-24', '2026-07-25', '2026-08-24'), { id: 'copy', start: '2026-07-25', end: '2026-07-29' }];
+  const c = cycles(dup);
+  eq('B20: two records with the same start give two cycles, not three', c.map((x) => x.length), [31, 30]);
+  eq('B20: no cycle is 0 days long', c.some((x) => x.length === 0), false);
+  const r = predict(dup, {}, '2026-09-10', {});
+  eq('B20: no "check" note comes from a copy', r.notes.filter((n) => n.kind === 'check').length, 0);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
