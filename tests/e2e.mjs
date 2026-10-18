@@ -66,10 +66,12 @@ async function setupOnce(p) {
     await p.fill('#sheet input[name=start]', s); await p.fill('#sheet input[name=end]', e); await p.click('#sheet form button:not(.pw-eye)'); await p.waitForTimeout(150);
   }
 }
-const metrics = (p) => p.evaluate(() => {
+// v5 (U8): a page change slides in; measure only after the motion has finished
+const settle = (p) => p.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
+const metrics = async (p) => { await settle(p); return p.evaluate(() => {
   const m = document.querySelector('main').getBoundingClientRect(); const nav = document.querySelector('.tabs').getBoundingClientRect();
   return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, main: m.width, vw: innerWidth, vh: innerHeight, navLeft: nav.left, navW: nav.width, navTop: nav.top };
-});
+}); };
 
 try {
 for (const eng of want) {
@@ -98,7 +100,7 @@ for (const eng of want) {
       if (scheme === 'light' || tab === 'today') await p.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-${tab}.png`) });
     }
     // Today: in landscape the ring must leave room for other content
-    await p.click('.tabs [data-tab=today]');
+    await p.click('.tabs [data-tab=today]'); await settle(p);
     const ringBlock = await p.evaluate(() => { const e = document.querySelector('.ring-block'); return { shown: getComputedStyle(e).display !== 'none', bottom: e.getBoundingClientRect().bottom }; });
     ok(`${tag} today: ring only on the laptop layout`, ringBlock.shown === (size === 'laptop'), JSON.stringify(ringBlock));
     if (ringBlock.shown) ok(`${tag} today: ring fits on the first screen`, ringBlock.bottom < h, `ring bottom ${ringBlock.bottom}`);
@@ -461,6 +463,145 @@ for (const eng of want) {
     const found = await w.evaluate(async () => { const c = window.__cycle; c.S.restore = { token: { token: 'dummy_token_A', exp: Date.now() + 3600e3 } }; await c.findForRestore(); return { id: c.S.restore.fileId, text: document.body.textContent }; });
     ok(`${eng} v4: B16 the switch account option shows even without the account name`, found.id === 'dummy_file_A' && /Signed in to Google/.test(found.text) && /Use a different Google account/.test(found.text));
     await c6.close();
+  }
+  // ---- v5: swipe and scroll lock (B18), no selection (B19), duplicate periods (B20), Review (U7), motion (U8), Theme and Halloween (U9), switches (U10), icons (B17) ----
+  {
+    const mk = async (w, h, scheme, extra = {}) => {
+      const cx = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block', ...extra });
+      await cx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
+      const pg = await cx.newPage(); await pg.clock.install({ time: new Date(NOW) }); pg.on('pageerror', (e) => errors.push(`${eng} v5: ${e.message}`));
+      await pg.goto(BASE); await setup(pg); return [cx, pg];
+    };
+    const [c7, v] = await mk(390, 844, 'light', eng === 'chromium' ? { hasTouch: true, isMobile: true } : {});
+    // B17: icon files exist under the new names and the page and manifest point at them
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), man = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
+    const refs = [...html.matchAll(/href="(icons\/[^"]+)"/g)].map((m) => m[1]).concat(man.icons.map((i) => i.src.replace(/^\.\//, '')));
+    ok(`${eng} v5 B17: every icon the page and manifest name exists`, refs.length >= 6 && refs.every((f) => fs.existsSync(path.join(ROOT, f))) && refs.every((f) => /cycle-/.test(f)), refs.join(', '));
+    ok(`${eng} v5 B17: Safari tab icon sizes 16, 32 and 48 are offered`, ['16x16', '32x32', '48x48'].every((s) => html.includes(`sizes="${s}"`)));
+    // B19: nothing in the app can be selected; typing fields still can
+    await v.click('.tabs [data-tab=today]'); await settle(v);
+    const sel = await v.evaluate(() => ({ btn: getComputedStyle(document.querySelector('.hero-btn')).userSelect, main: getComputedStyle(document.querySelector('main')).userSelect, touch: getComputedStyle(document.body).webkitTouchCallout }));
+    ok(`${eng} v5 B19: buttons and text are not selectable`, sel.btn === 'none' && sel.main === 'none', JSON.stringify(sel));
+    await v.click('.tabs [data-tab=history]'); await v.click('[data-act=add-past] >> nth=0'); await v.waitForSelector('#sheet input[name=start]');
+    ok(`${eng} v5 B19: date and text fields stay editable`, (await v.evaluate(() => getComputedStyle(document.querySelector('#sheet input[name=start]')).userSelect)) === 'text');
+    await v.click('#sheet .btn.wide[data-act=close-sheet]');
+    // check-in title wording
+    await v.click('.tabs [data-tab=today]'); await v.click('[data-act=checkin] >> nth=0'); await v.waitForSelector('#sheet h2');
+    ok(`${eng} v5: check-in pop-up title reads "Check-in · Today"`, (await v.textContent('#sheet h2')) === 'Check-in · Today', await v.textContent('#sheet h2'));
+    await v.click('#sheet .btn.wide[data-act=close-sheet]');
+    // B18: the page behind a pop-up is pinned and comes back to the same place
+    await v.click('.tabs [data-tab=today]'); await settle(v);
+    await v.evaluate(() => { document.querySelector('main').style.paddingBottom = '900px'; window.scrollTo(0, 220); });
+    const y0 = await v.evaluate(() => scrollY);
+    await v.click('[data-act=add-past] >> nth=0'); await v.waitForSelector('#sheet input[name=start]'); await v.waitForTimeout(450);
+    const lock = await v.evaluate(() => ({ cls: document.body.classList.contains('scroll-locked'), pos: getComputedStyle(document.body).position, top: document.body.style.top }));
+    ok(`${eng} v5 B18: the page behind an open pop-up is pinned`, lock.cls && lock.pos === 'fixed' && lock.top === `-${y0}px`, JSON.stringify({ lock, y0 }));
+    await v.mouse.wheel(0, 300).catch(() => {});
+    ok(`${eng} v5 B18: scrolling does not move the page behind`, (await v.evaluate(() => Math.abs(parseFloat(document.body.style.top)))) === y0);
+    if (eng === 'chromium') {
+      const cdp = await c7.newCDPSession(v);
+      const touch = (type, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: 195, y }] });
+      const top = await v.evaluate(() => document.querySelector('.sheet-card').getBoundingClientRect().top);
+      await touch('touchStart', top + 12); for (const dy of [20, 60, 110, 150]) await touch('touchMove', top + 12 + dy); await touch('touchEnd', 0);
+      ok(`${eng} v5 B18: swiping the pop-up down closes it`, await until(v, () => !window.__cycle.S.sheet));
+      // a short pull springs back and keeps it open
+      await v.click('[data-act=add-past] >> nth=0'); await v.waitForSelector('#sheet input[name=start]'); await v.waitForTimeout(450);
+      const top2 = await v.evaluate(() => document.querySelector('.sheet-card').getBoundingClientRect().top);
+      await touch('touchStart', top2 + 12); for (const dy of [10, 25, 35]) await touch('touchMove', top2 + 12 + dy); await touch('touchEnd', 0); await v.waitForTimeout(400);
+      ok(`${eng} v5 B18: a short pull springs back and the pop-up stays open`, await v.evaluate(() => !!window.__cycle.S.sheet && Math.abs(document.querySelector('.sheet-card').getBoundingClientRect().top - (innerHeight - document.querySelector('.sheet-card').getBoundingClientRect().height)) < 2));
+      // a second finger during a swipe puts the pop-up back
+      const top3 = await v.evaluate(() => document.querySelector('.sheet-card').getBoundingClientRect().top);
+      await touch('touchStart', top3 + 12); await touch('touchMove', top3 + 40); await touch('touchMove', top3 + 70);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 195, y: top3 + 70, id: 0 }, { x: 250, y: top3 + 90, id: 1 }] });
+      await v.waitForTimeout(400);
+      ok(`${eng} v5 B18: a second finger puts the pop-up back, nothing stays pulled down`, await v.evaluate(() => { const c = document.querySelector('.sheet-card'); return !!window.__cycle.S.sheet && !c.classList.contains('dragging') && c.style.transform === ''; }));
+      await touch('touchEnd', 0);
+      await v.click('#sheet .btn.wide[data-act=close-sheet]');
+    } else await v.click('#sheet .btn.wide[data-act=close-sheet]');
+    await v.waitForTimeout(100);
+    ok(`${eng} v5 B18: closing puts the page back where it was`, Math.abs((await v.evaluate(() => scrollY)) - y0) <= 1 && !(await v.evaluate(() => document.body.classList.contains('scroll-locked'))), `y0 ${y0} now ${await v.evaluate(() => scrollY)}`);
+    await v.evaluate(() => { document.querySelector('main').style.paddingBottom = ''; window.scrollTo(0, 0); });
+
+    // B20: the same start saved twice is merged when Cycle opens
+    await v.evaluate(async () => { const c = window.__cycle; const a = c.S.data.periods.find((x) => !x.deleted && x.start === '2026-08-24');
+      c.S.data.periods.push({ id: 'dup_test_1', start: a.start, end: null, updatedAt: Date.now() }, { id: 'dup_test_2', start: a.start, end: a.end, updatedAt: Date.now() }); await c.persist(); });
+    await goSet(v, 'privacy'); await v.click('[data-act=lock-now]'); await v.fill('form[data-form=unlock] input[name=p]', PASS); await v.click('form[data-form=unlock] button:not(.pw-eye)'); await v.waitForSelector('main.screen', { timeout: 45000 });
+    const dup = await v.evaluate(() => { const live = window.__cycle.S.data.periods.filter((x) => !x.deleted); return { n: live.length, same: live.filter((x) => x.start === '2026-08-24').length, note: /0 days? long/.test(document.body.textContent) }; });
+    ok(`${eng} v5 B20: duplicate same-start periods are merged on opening`, dup.n === 4 && dup.same === 1 && !dup.note, JSON.stringify(dup));
+
+    // U7: Review. A short gap in the history is a check note: Today shows one line, the Review page shows the note.
+    await v.click('.tabs [data-tab=history]'); await v.click('[data-act=add-past] >> nth=0');
+    await v.fill('#sheet input[name=start]', '2026-09-05'); await v.fill('#sheet input[name=end]', '2026-09-09'); await v.click('#sheet form button:not(.pw-eye)'); await v.waitForTimeout(200);
+    await v.click('.tabs [data-tab=today]'); await settle(v);
+    const rl = await v.evaluate(() => ({ line: (document.querySelector('.review-line') || {}).textContent || '', notes: document.querySelectorAll('main .note.check, main .note.missed, main .note.info, main .flag.doctor').length }));
+    ok(`${eng} v5 U7: Today shows one "things to review" line and no check notes`, /\d things? to review/.test(rl.line) && rl.notes === 0, JSON.stringify(rl));
+    await v.click('.review-line'); await settle(v);
+    const rv2 = await v.evaluate(() => ({ title: document.querySelector('.topbar h1').textContent, notes: document.querySelectorAll('.tab-review .note, .tab-review .flag').length, sec: [...document.querySelectorAll('.tab-review .sec')].map((e) => e.textContent), on: document.querySelector('.tabs button.on').dataset.tab }));
+    ok(`${eng} v5 U7: Review page lists the notes and keeps Today lit in the tab bar`, rv2.title === 'Review' && rv2.notes >= 1 && rv2.sec.length >= 1 && rv2.on === 'today', JSON.stringify(rv2));
+    await v.click('.tab-review .back'); await settle(v);
+    ok(`${eng} v5 U7: Back returns to Today`, (await v.evaluate(() => window.__cycle.S.tab)) === 'today');
+
+    // U8: motion
+    await goSet(v, 'look'); await settle(v);
+    ok(`${eng} v5 U8: Motion offers Automatic, Full, Reduced and Off`, (await v.locator('[data-act=look-motion]').allTextContents()).join() === 'Automatic,Full,Reduced,Off');
+    ok(`${eng} v5 U8: Automatic is the starting choice`, (await v.getAttribute('[data-act=look-motion][data-v=auto]', 'aria-pressed')) === 'true');
+    await v.click('[data-act=look-motion][data-v=full]'); await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v5 U8: Full slides a page in`, await v.evaluate(() => /anim-tab/.test(document.querySelector('main').className) && document.documentElement.dataset.motion === 'full'));
+    await settle(v);
+    await goSet(v, 'look'); await v.click('[data-act=look-motion][data-v=reduced]'); await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v5 U8: Reduced only fades`, await v.evaluate(() => /anim-fade/.test(document.querySelector('main').className)));
+    await settle(v);
+    await goSet(v, 'look'); await v.click('[data-act=look-motion][data-v=off]'); await v.click('.tabs [data-tab=calendar]');
+    ok(`${eng} v5 U8: Off shows pages at once`, await v.evaluate(() => !/anim-/.test(document.querySelector('main').className) && document.documentElement.dataset.motion === 'off'));
+    await goSet(v, 'look'); await v.click('[data-act=look-motion][data-v=auto]');
+    ok(`${eng} v5 U8: Automatic can be chosen again after Off`, await until(v, () => window.__cycle.S.data.settings.look.motion === 'auto' && document.querySelector('[data-act=look-motion][data-v=auto]').getAttribute('aria-pressed') === 'true'));
+    ok(`${eng} v5: every Look option group has a name for screen readers`, await v.evaluate(() => [...document.querySelectorAll('.look-card [role=group]')].every((g) => !!g.getAttribute('aria-label'))));
+
+    // U9 and U10: Theme, Colour only for Classic, Halloween, switches in the theme colour
+    await goSet(v, 'look'); await settle(v);
+    const lk = await v.evaluate(() => ({ cards: [...document.querySelectorAll('[data-act=look-style]')].map((b) => b.querySelector('strong').textContent + ':' + b.getAttribute('aria-pressed')), colour: document.querySelectorAll('.swatches').length, h3: [...document.querySelectorAll('.look-card h3')].map((e) => e.textContent) }));
+    ok(`${eng} v5 U9: Classic is selected and shows Colour`, lk.cards.join() === 'Classic:true,Halloween:false' && lk.colour === 1 && lk.h3.includes('Colour') && lk.h3.includes('Theme'), JSON.stringify(lk));
+    const sw = (pg) => pg.evaluate(() => { const i = document.querySelector('input[role=switch]:checked'); const d = document.createElement('div'); d.style.background = 'var(--accent)'; document.body.append(d); const a = getComputedStyle(d).backgroundColor; d.remove(); return { sw: i ? getComputedStyle(i).backgroundColor : null, accent: a }; });
+    const s1 = await sw(v); ok(`${eng} v5 U10: switches use the theme colour in Classic, not iOS green`, s1.sw === s1.accent && s1.sw !== 'rgb(52, 199, 89)', JSON.stringify(s1));
+    await v.click('[data-act=look-style][data-v=halloween]'); await until(v, () => document.documentElement.dataset.style === 'halloween'); await settle(v);
+    const hw = await v.evaluate(() => ({ colour: document.querySelectorAll('.swatches').length, back: !!document.querySelector('[data-act=look-autoback]'), accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), stored: window.__cycle.S.data.settings.look.style, set: window.__cycle.S.data.settings.look.styleSet, pumpkin: document.querySelectorAll('.tabs [data-tab=food] svg path').length }));
+    ok(`${eng} v5 U9: Halloween hides Colour, offers "back to Classic", and is stored in her settings`, hw.colour === 0 && hw.back && hw.stored === 'halloween' && hw.set === '2026-10-03' && /^#(B4470C|FF8A2A)$/i.test(hw.accent), JSON.stringify(hw));
+    ok(`${eng} v5 U9: the Food tab icon becomes a pumpkin`, hw.pumpkin === 3, String(hw.pumpkin));
+    const s2 = await sw(v); ok(`${eng} v5 U10: switches turn orange in Halloween`, s2.sw === s2.accent && /^rgb\((180, 71, 12|255, 138, 42)\)$/.test(s2.sw), JSON.stringify(s2));
+    const sk = {};
+    for (const tab of ['today', 'calendar', 'food', 'settings']) { await v.click(`.tabs [data-tab=${tab}]`); await settle(v); sk[tab] = await v.evaluate(() => ({ sketches: document.querySelectorAll('main svg.sk, main svg.sky').length, hidden: [...document.querySelectorAll('main svg.sk, main svg.sky')].every((s) => s.getAttribute('aria-hidden') === 'true'), h: document.documentElement.scrollWidth > innerWidth + 1 })); }
+    ok(`${eng} v5 U9: sketches appear on Today, Calendar, Food and Settings, hidden from screen readers, no sideways scrolling`, Object.values(sk).every((x) => x.sketches >= 1 && x.hidden && !x.h), JSON.stringify(sk));
+    // Back to Classic on 1 November (a date rule, nothing is written)
+    await v.clock.setSystemTime(new Date('2026-10-31T23:00:00')); await v.evaluate(() => window.__cycle.render());
+    const d31 = await v.evaluate(() => document.documentElement.dataset.style);
+    await v.clock.setSystemTime(new Date('2026-11-01T00:30:00')); await v.evaluate(() => window.__cycle.render());
+    const d1 = await v.evaluate(() => ({ s: document.documentElement.dataset.style, stored: window.__cycle.S.data.settings.look.style }));
+    ok(`${eng} v5 U9: Halloween ends on 1 November without changing her saved choice`, d31 === 'halloween' && d1.s === 'classic' && d1.stored === 'halloween', JSON.stringify({ d31, d1 }));
+    await v.clock.setSystemTime(new Date(NOW)); await v.evaluate(() => window.__cycle.render());
+    await c7.close();
+
+    // Halloween screenshots and layout, phone and laptop, light and dark (also the Review page and Look)
+    for (const [size, w, h] of [['phone', 390, 844], ['laptop', 1470, 956]]) for (const scheme of ['light', 'dark']) {
+      const [cx, q] = await mk(w, h, scheme);
+      await q.click('.tabs [data-tab=history]'); await q.click('[data-act=add-past] >> nth=0'); await q.fill('#sheet input[name=start]', '2026-09-05'); await q.fill('#sheet input[name=end]', '2026-09-09'); await q.click('#sheet form button:not(.pw-eye)'); await q.waitForTimeout(200);
+      await goSet(q, 'look'); await q.click('[data-act=look-style][data-v=halloween]'); await until(q, () => document.documentElement.dataset.style === 'halloween');
+      await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-halloween-look.png`), fullPage: true });
+      for (const tab of ['today', 'calendar', 'food', 'history', 'settings']) {
+        await q.click(`.tabs [data-tab=${tab}]`); const m = await metrics(q);
+        ok(`${eng} ${size} ${scheme} Halloween ${tab}: no sideways scrolling`, !m.hscroll);
+        await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-halloween-${tab}.png`) });
+      }
+      await q.click('.tabs [data-tab=today]'); await settle(q); await q.click('.review-line'); await settle(q);
+      await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-halloween-review.png`) });
+      const texts = await q.evaluate(() => { const cs = getComputedStyle(document.documentElement); return { h1: cs.getPropertyValue('--h1').trim(), h2: cs.getPropertyValue('--h2').trim() }; });
+      ok(`${eng} ${size} ${scheme} Halloween: header text readable (≥4.5:1)`, contrast('#FFFFFF', texts.h1) >= 4.5 && contrast('#FFFFFF', texts.h2) >= 4.5, JSON.stringify(texts));
+      // Classic again: the Review page, Calendar and Settings in the normal look
+      await goSet(q, 'look'); await q.click('[data-act=look-style][data-v=classic]'); await until(q, () => document.documentElement.dataset.style === 'classic'); await settle(q);
+      await q.click('.tabs [data-tab=calendar]'); await settle(q); await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-classic-calendar.png`) });
+      await q.click('.tabs [data-tab=today]'); await settle(q); await q.click('.review-line'); await settle(q); await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-classic-review.png`) });
+      await goSet(q, 'look'); await settle(q); await q.screenshot({ path: path.join(OUT, `${eng}-${size}-${scheme}-v5-classic-look.png`), fullPage: true });
+      await cx.close();
+    }
   }
   for (const b of extra) await b.close().catch(() => {});
   await browser.close();

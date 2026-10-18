@@ -116,6 +116,30 @@ export function mergeSettings(a = {}, b = {}) {
   out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
   return out;
 }
+// v5 (B20): a period saved twice (the same history imported on two devices, or a backup imported over itself) has two
+// records with different ids but the same first day. They become one: the lowest id stays, with the later end and any
+// exclusion kept; the others are tombstoned so the repair syncs. Every device computes the same result, and running
+// it again changes nothing.
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+export function dedupePeriods(periods) {
+  const groups = {};
+  for (const p of periods || []) if (!p.deleted && DATE.test(p.start || '')) (groups[p.start] ||= []).push(p);
+  const swap = new Map();
+  for (const g of Object.values(groups)) {
+    if (g.length < 2) continue;
+    g.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const top = Math.max(...g.map((p) => p.updatedAt || 0)) + 1;
+    const ends = g.map((p) => p.end).filter((e) => DATE.test(e || '')).sort();
+    const ex = [...g].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || (a.id < b.id ? -1 : 1)).find((p) => p.excluded); // the newest exclusion wins, the same on every device
+    const keep = { ...g[0], updatedAt: top };
+    if (ends.length) keep.end = ends[ends.length - 1];
+    if (ex) { keep.excluded = true; keep.excludeReason = ex.excludeReason || ''; }
+    if (g.some((p) => p.confirmedLong)) keep.confirmedLong = true;
+    swap.set(g[0], keep);
+    for (const p of g.slice(1)) swap.set(p, { ...p, deleted: true, updatedAt: top });
+  }
+  return swap.size ? (periods || []).map((p) => swap.get(p) || p) : (periods || []);
+}
 export function merge(local, remote) {
   if (!remote) return local;
   const newer = (a, b) => ((b && b.updatedAt) || 0) > ((a && a.updatedAt) || 0) ? b : a;
@@ -125,6 +149,6 @@ export function merge(local, remote) {
   for (const [d, v] of Object.entries(remote.days || {})) days[d] = mergeDay(days[d], v);
   const perKey = (a = {}, b = {}) => { const o = { ...a }; for (const [k, v] of Object.entries(b)) o[k] = o[k] ? newer(o[k], v) : v; return o; };
   return { ...remote, ...local, app: 'cycle', v: 1, schema: Math.max(SCHEMA, local.schema || 0, remote.schema || 0),
-    settings: mergeSettings(local.settings || {}, remote.settings || {}), periods: Object.values(byId), days,
+    settings: mergeSettings(local.settings || {}, remote.settings || {}), periods: dedupePeriods(Object.values(byId)), days,
     checkins: perKey(local.checkins, remote.checkins), acks: perKey(local.acks, remote.acks) };
 }

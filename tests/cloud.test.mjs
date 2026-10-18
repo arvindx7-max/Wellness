@@ -1,5 +1,5 @@
 // v4 (G4-1): per-field merge of days, schema number, unknown keys kept. Mock data only.
-import { merge, mergeDay, mergeSettings, SCHEMA } from '../cloud.js';
+import { merge, mergeDay, mergeSettings, dedupePeriods, SCHEMA } from '../cloud.js';
 let pass = 0, fail = 0;
 const ok = (n, c, info = '') => { c ? pass++ : (fail++, console.log(`FAIL  ${n} ${info}`)); };
 const D = '2026-10-03';
@@ -23,4 +23,20 @@ const ms = mergeSettings(sA, sB), ms2 = mergeSettings(sB, sA);
 ok('a theme change on one device and a hide change on the other both survive', ms.look.theme === 'tide' && ms.hide.sex === false, JSON.stringify(ms));
 ok('settings merge is the same in both directions', JSON.stringify(ms) === JSON.stringify(ms2));
 ok('settings from v3.2 without part times still merge', mergeSettings({ usualCycle: 28, updatedAt: 5 }, { usualCycle: 30, look: { theme: 'tide' }, updatedAt: 9 }).usualCycle === 30);
+// v5 (B20): the same history saved twice under different ids becomes one record per start day. Mock dates only.
+const dupA = [{ id: 'pA1', start: '2026-06-24', end: '2026-06-28', updatedAt: 10 }, { id: 'pA2', start: '2026-07-25', end: '2026-07-29', updatedAt: 10 }];
+const dupB = [{ id: 'pB1', start: '2026-06-24', updatedAt: 20 }, { id: 'pB2', start: '2026-07-25', end: '2026-07-30', updatedAt: 20 }, { id: 'pB3', start: '2026-08-24', updatedAt: 20 }];
+const mA = merge({ periods: dupA, settings: {} }, { periods: dupB, settings: {} }), mB = merge({ periods: dupB, settings: {} }, { periods: dupA, settings: {} });
+const liveOf = (m) => m.periods.filter((p) => !p.deleted);
+ok('the same history on two devices merges to one period per start day', liveOf(mA).length === 3 && new Set(liveOf(mA).map((p) => p.start)).size === 3, JSON.stringify(liveOf(mA)));
+ok('the merge keeps the later end day and is the same in both directions', liveOf(mA).find((p) => p.start === '2026-07-25').end === '2026-07-30' && JSON.stringify(liveOf(mA).map((p) => [p.id, p.start, p.end]).sort()) === JSON.stringify(liveOf(mB).map((p) => [p.id, p.start, p.end]).sort()));
+ok('the copies are kept as deleted records so the repair syncs', mA.periods.filter((p) => p.deleted).length === 2);
+ok('repairing again changes nothing', JSON.stringify(dedupePeriods(mA.periods)) === JSON.stringify(mA.periods));
+const again = merge(mA, { periods: dupB, settings: {} });
+ok('an older device that still has the copies cannot bring them back', liveOf(again).length === 3);
+const ex = dedupePeriods([{ id: 'a', start: '2026-06-24', updatedAt: 1 }, { id: 'b', start: '2026-06-24', excluded: true, excludeReason: 'Pregnancy', updatedAt: 2 }]).find((p) => !p.deleted);
+ok('an exclusion on either copy is kept', ex.excluded === true && ex.excludeReason === 'Pregnancy');
+ok('periods without copies are returned untouched', (() => { const x = [{ id: 'a', start: '2026-06-24', updatedAt: 1 }]; return dedupePeriods(x) === x; })());
+const two = dedupePeriods([{ id: 'a', start: '2026-06-24', excluded: true, excludeReason: 'dummy_reason_old', updatedAt: 1 }, { id: 'b', start: '2026-06-24', excluded: true, excludeReason: 'dummy_reason_new', updatedAt: 5 }]).find((p) => !p.deleted);
+ok('when both copies are excluded, the newest reason is kept', two.excludeReason === 'dummy_reason_new');
 console.log(`cloud: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);

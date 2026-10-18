@@ -7,9 +7,11 @@ import * as T from './content.js';
 import { evaluate, recsFor, heavyDays, lateResult } from './rules.js';
 import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
+import { SWIPE, canStartDrag, shouldClose, dragOffset } from './gesture.js';
+import { pumpkin, witch, PUMPKIN_TAB, HERO_SKY } from './decor.js';
 import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v4';
+export const VERSION = 'v5';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -91,18 +93,25 @@ async function setLook(patch) {
   await persist(); render();
 }
 const sysDark = () => !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+const sysReduced = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+// v5: the style actually shown (Halloween returns to Classic on 1 November, by date, nothing is written) and the motion actually used
+const styleNow = () => TH.effectiveStyle(look(), today());
+const motionNow = () => TH.effectiveMotion(look(), sysReduced());
 function applyLook() {
   const l = look(), r = document.documentElement;
   const dark = l.mode === 'dark' || (l.mode === 'auto' && sysDark());
+  const hw = styleNow() === 'halloween';
   const t = TH.THEMES[l.theme] || TH.THEMES.tide; const [a, b] = dark ? t.dark : t.light; const ac = dark ? t.accent[1] : t.accent[0];
-  r.dataset.mode = l.mode;
-  // B13: the browser bar follows the chosen Light/Dark, not only the phone's setting
-  const bar = l.mode === 'auto' ? null : (dark ? '#000000' : '#F2F2F7');
+  r.dataset.mode = l.mode; r.dataset.style = hw ? 'halloween' : 'classic'; r.dataset.motion = motionNow();
+  // B13: the browser bar follows the chosen Light/Dark, not only the phone's setting. Halloween paints its own background.
+  const bar = hw ? TH.HALLOWEEN[dark ? 'dark' : 'light']['--bg'] : l.mode === 'auto' ? null : (dark ? '#000000' : '#F2F2F7');
   for (const id of ['tc-light', 'tc-dark']) { const m = document.getElementById(id); if (m) { m.content = bar || (id === 'tc-dark' ? '#000000' : '#F2F2F7'); if (bar) m.removeAttribute('media'); else m.setAttribute('media', id === 'tc-dark' ? '(prefers-color-scheme: dark)' : '(prefers-color-scheme: light)'); } }
+  for (const k of Object.keys(TH.HALLOWEEN.light)) r.style.removeProperty(k);
   for (const [k, v] of [['--h1', a], ['--h2', b], ['--accent', ac], ['--accent-tint', TH.tint(ac, dark ? 0.22 : 0.12)], ['--on-accent', dark ? TH.ON_ACCENT.dark : TH.ON_ACCENT.light]]) r.style.setProperty(k, v);
+  if (hw) for (const [k, v] of Object.entries(TH.HALLOWEEN[dark ? 'dark' : 'light'])) r.style.setProperty(k, v);
+  r.style.colorScheme = dark ? 'dark' : 'light';
 }
 
-// B14: a background refresh (sync finished, app came back) must never redraw while she is typing or a sheet is open
 function busyEditing() {
   const a = document.activeElement;
   return !!S.sheet || !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || S.view !== 'app';
@@ -129,7 +138,10 @@ function render() {
   else if (S.view === 'import') app.innerHTML = importView();
   else if (S.view === 'erase') app.innerHTML = eraseView();
   else if (S.view === 'app') {
-    app.innerHTML = `<main class="screen tab-${S.tab}">${{ today: todayView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
+    // v5 (U8): a page change plays the chosen motion once; a redraw in place (sync, typing) never does
+    const nav = S.nav; S.nav = null; const mo = motionNow();
+    const anim = !nav || mo === 'off' ? '' : mo === 'reduced' ? 'anim-fade' : `anim-${nav}`;
+    app.innerHTML = `<main class="screen tab-${S.tab} ${anim}">${{ today: todayView, review: reviewView, calendar: calendarView, food: foodView, history: historyView, settings: settingsView }[S.tab]()}</main>${navBar()}`;
   } else app.innerHTML = '';
   const sh = $('#sheet');
   if (S.sheet && S.view === 'app') {
@@ -139,6 +151,14 @@ function render() {
     sh.hidden = false; sh.dataset.name = S.sheet.name; if (top) sh.querySelector('.sheet-card').scrollTop = top;
   }
   else { sh.hidden = true; sh.innerHTML = ''; }
+  syncScrollLock();
+}
+// B18: while a pop-up is open the page behind it cannot scroll. The body is pinned, and the scroll position is put back when it closes.
+let lockY = null;
+function syncScrollLock() {
+  const on = !!(S.sheet && S.view === 'app');
+  if (on && lockY === null) { lockY = window.scrollY || 0; document.body.style.top = `-${lockY}px`; document.body.classList.add('scroll-locked'); }
+  else if (!on && lockY !== null) { const y = lockY; lockY = null; document.body.classList.remove('scroll-locked'); document.body.style.top = ''; window.scrollTo(0, y); }
 }
 
 // ---------------- passphrase fields ----------------
@@ -377,6 +397,7 @@ function todayView() {
   const L = look();
   return `${heroView(p, heroBtn, t)}
   ${flagCards()}
+  ${reviewLine()}
   ${st.id === 'late' ? `<button class="card late-card" data-act="late-check"><span><strong>Period ${st.stale ? 'not logged for a long time' : `${plural(st.daysLate, 'day')} late`}</strong><span class="fine">Check what could be behind it</span></span><span aria-hidden="true">›</span></button>` : ''}
   ${L.companion !== 'off' && !L.noteSeen ? `<section class="note companion-note"><p>${h(TH.COMPANION_CAPTION)}</p><button class="btn small" data-act="note-seen">Got it</button></section>` : ''}
   <div class="today-grid">
@@ -394,7 +415,7 @@ function todayView() {
       <div class="o3 bento">${L.cards.checkin ? checkinCard(t) : ''}${L.cards.food ? foodTeaser() : ''}</div>
       <div class="o8">${L.cards.phase ? phaseCard(st.id) : ''}</div>
 
-      <div class="o10">${p.notes.filter((n) => n.kind !== 'doctor').map(noteCard).join('')}</div>
+      <div class="o10">${p.notes.filter((n) => n.kind === 'late').map(noteCard).join('')}</div>
     </div>
   </div>`;
 }
@@ -429,6 +450,7 @@ function heroView(p, btn, t) {
     <div class="sub">${h(line)}</div>
     ${btn}
     ${art ? `<div class="companion" data-stage="${L.companion}-${phase}" aria-hidden="true">${art}</div>` : ''}
+    ${styleNow() === 'halloween' ? HERO_SKY : ''}
   </section>`;
 }
 // B2 item 1: explain wide estimates and how to sharpen them
@@ -453,8 +475,9 @@ function confidenceText(p) {
   return p.usedDefault ? 'Low confidence: no cycle logged yet, so a typical 29-day cycle is assumed.' : 'Low confidence: based on the cycle length you entered.';
 }
 // ---------------- v2: warnings, check-in, suggestions, food ----------------
-function flagCards() {
-  const open = (S.flags || []).filter((f) => !S.data.acks[f.id]);
+const TODAY_FLAGS = ['urgent', 'support'];
+function flagCards(onToday = true) {
+  const open = (S.flags || []).filter((f) => !S.data.acks[f.id] && TODAY_FLAGS.includes(f.level) === onToday);
   const urgent = open.filter((f) => f.level === 'urgent');
   const one = urgent.length > 1 ? `<section class="flag urgent" role="alert"><h2>Seek medical care today</h2><ul>${urgent.map((f) => `<li>${h(f.text)}</li>`).join('')}</ul>
     <p class="fine">Source: <a href="${T.SRC.mayoHmb.url}" target="_blank" rel="noopener noreferrer">${h(T.SRC.mayoHmb.name)}</a></p>
@@ -482,7 +505,7 @@ function recBlock(r) {
 }
 function foodTeaser() {
   const ph = S.pred && !S.pred.empty ? phaseKey(S.pred.state.id) : 'follicular'; const f = T.FOOD[ph];
-  return `<button class="card food-teaser" data-tab="food"><span class="badge-soft">Food for now</span><span class="ft">${h(f.title)}</span></button>`;
+  return `<button class="card food-teaser" data-tab="food">${styleNow() === 'halloween' ? `<span class="decor corner">${pumpkin(58)}</span>` : ''}<span class="badge-soft">Food for now</span><span class="ft">${h(f.title)}</span></button>`;
 }
 const phaseKey = (id) => (['menstruation', 'luteal', 'late', 'fertile', 'follicular'].includes(id) ? id : 'follicular');
 
@@ -493,7 +516,7 @@ function foodView() {
   const tabs = [['menstruation', 'During your period'], ['follicular', 'Rest of the cycle'], ['luteal', 'Before your period']];
   const diet = S.data.settings.diet || 'all';
   // B3: all three cards are rendered; on a phone only the selected one shows, on a wide screen all three sit side by side.
-  return `${topbar('Food')}
+  return `${topbar('Food', '', styleNow() === 'halloween' ? pumpkin(58) : '')}
   <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${show === k}" data-act="foodtab" data-k="${k}">${l}${curKey === k ? ' (now)' : ''}</button>`).join('')}</div>
   ${S.data.settings.diet ? '' : '<section class="note missed"><p>Choose your diet in Settings so the lists only show foods you eat. Until then, all foods are listed.</p><button class="btn" data-tab="settings">Open Settings</button></section>'}
   <div class="food-grid">${tabs.map(([k, l]) => foodCard(k, l, k === show, k === curKey, diet)).join('')}</div>
@@ -532,7 +555,7 @@ function checkinSheet(date) {
     sidepain: yesno('sidepain', 'Pain on one side of your lower belly?') };
   const others = T.SYMPTOMS.filter((s) => !q.symptoms.includes(s.code));
   const extraOpen = others.some((s) => sy[s.code]);
-  return `<h2>${h(q.title)}: ${date === today() ? 'today' : fmt(date)}</h2>
+  return `<h2>Check-in · ${date === today() ? 'Today' : fmt(date)}</h2>${q.title === 'Today' ? '' : `<p class="fine">${h(q.title)}</p>`}
   <form class="stack checkin-form" data-form="checkin" data-date="${date}">
     ${q.ask.map((k) => asks[k]).join('')}
     ${hidden('symptoms') ? '' : q.symptoms.map(scale).join('')}
@@ -545,6 +568,34 @@ function checkinSheet(date) {
   </form><button class="btn wide" data-act="close-sheet">Cancel</button>`;
 }
 
+// v5 (U7): checks on her history live on their own page; Today shows one line with the count.
+function reviewItems() {
+  const p = S.pred; if (!p || p.empty || p.paused) return { fix: [], know: [], done: [] };
+  const flags = (S.flags || []).filter((f) => !TODAY_FLAGS.includes(f.level));
+  return { fix: p.notes.filter((n) => n.kind === 'check' || n.kind === 'missed'),
+    know: [...p.notes.filter((n) => n.kind === 'info').map((n) => ({ note: n })), ...flags.filter((f) => !S.data.acks[f.id]).map((f) => ({ flag: f }))],
+    done: flags.filter((f) => S.data.acks[f.id]) };
+}
+const reviewCount = () => { const r = reviewItems(); return r.fix.length + r.know.length; };
+function reviewLine() {
+  const n = reviewCount(); if (!n) return '';
+  return `<button class="card review-line" data-tab="review" data-nav="push"><span class="rl-n" aria-hidden="true">${n}</span><span class="rl-t"><strong>${n === 1 ? '1 thing to review' : `${n} things to review`}</strong><span class="fine">Checks on your history · not urgent</span></span><span class="rl-c" aria-hidden="true">›</span></button>`;
+}
+function flagCard(f) {
+  return `<section class="flag ${f.level}"><h2>${h(f.title)}</h2><p>${h(f.text)}</p>
+    ${f.src ? `<p class="fine">Source: <a href="${T.SRC[f.src].url}" target="_blank" rel="noopener noreferrer">${h(T.SRC[f.src].name)}</a></p>` : ''}
+    <button class="btn small" data-act="ack" data-id="${h(f.id)}">I have read this</button></section>`;
+}
+function reviewView() {
+  const r = reviewItems(); const hw = styleNow() === 'halloween';
+  return `<button class="link back" data-tab="today" data-nav="back">‹ Today</button>${topbar('Review')}
+  <p class="lede">Things in your history worth a look. Each one stays out of your predictions until you decide.</p>
+  ${r.fix.length ? `<h2 class="sec">To fix · ${r.fix.length}</h2>${r.fix.map(noteCard).join('')}` : ''}
+  ${r.know.length ? `<h2 class="sec">Worth knowing · ${r.know.length}</h2>${r.know.map((x) => (x.note ? noteCard(x.note) : flagCard(x.flag))).join('')}` : ''}
+  ${!r.fix.length && !r.know.length ? '<section class="card"><p>Nothing to review right now.</p></section>' : ''}
+  ${r.done.length ? `<details class="done"><summary>Reviewed earlier · ${r.done.length}</summary>${r.done.map((f) => `<p><strong>${h(f.title)}</strong><br>${h(f.text)}</p>`).join('')}</details>` : ''}
+  ${hw ? `<div class="decor patch">${pumpkin(44)}${pumpkin(64)}${pumpkin(38)}</div>` : ''}`;
+}
 function noteCard(n) {
   const btn = n.kind === 'late' ? '<button class="btn" data-act="add-past">Add an earlier start date</button>'
     : n.kind === 'check' ? '<button class="btn" data-tab="history">Review in History</button>'
@@ -625,7 +676,7 @@ function calendarView() {
     cells.push(`<button class="cal-day ${ds === t ? 'is-today' : ''}" data-act="day" data-date="${ds}" aria-label="${fmt(ds)}: ${h(describe(info))}"><span class="dn ${dayClass(info)}">${d}</span><span class="sym">${daySymbol(info)}</span></button>`);
   }
   const wording = !!S.data.settings.wording;
-  return `${topbar('Calendar')}
+  return `${topbar('Calendar', '', styleNow() === 'halloween' ? witch(88) : '')}
   <div class="month-nav"><button class="icon-btn" data-act="month" data-step="-1" aria-label="Previous month">‹</button><h2>${MONTHS[m - 1]} ${y}</h2><button class="icon-btn" data-act="month" data-step="1" aria-label="Next month">›</button></div>
   <div class="cal-grid">${(sun ? ['Sun', ...WD.slice(0, 6)] : WD).map((w) => `<span class="cal-wd">${w.slice(0, 2)}</span>`).join('')}${cells.join('')}</div>
   ${ym !== t.slice(0, 7) ? '<button class="link center" data-act="month-today">Back to this month</button>' : ''}
@@ -634,8 +685,8 @@ function calendarView() {
     <span><i class="lg m-peak"></i>${wording ? 'High chance of pregnancy' : 'Peak fertile days'}</span><span><i class="lg m-possible"></i>${wording ? 'Higher chance of pregnancy' : 'Possible fertile days'}</span>
     <span><b class="s-ovu">●</b>Likely ovulation</span><span><b class="s-flow">◆</b>Bleeding logged</span>
     ${hidden('tests') ? '' : '<span><b class="s-test">▲</b>Positive test</span>'}${hidden('sex') ? '' : '<span><b class="s-sex">○</b>Sex logged</span>'}
-  </section>
-  <p class="fine">${wording ? WARNING : 'All future days are estimates. Paler marks are further ahead and less certain.'}</p>`;
+    <p class="fine lg-note">${wording ? WARNING : 'All future days are estimates. Paler marks are further ahead and less certain.'}</p>
+  </section>`;
 }
 
 // ---------------- History (FR-05) ----------------
@@ -684,7 +735,7 @@ const SET_PAGES = [
 function setValue(k) {
   const s = S.data.settings, l = look(), dsp = display();
   if (k === 'cycle') return [s.usualCycle ? `Usual cycle ${s.usualCycle} days` : 'Usual lengths not set', s.birthYear ? `born ${s.birthYear}` : ''].filter(Boolean).join(' · ');
-  if (k === 'look') return `${({ auto: 'Automatic', light: 'Light', dark: 'Dark' })[l.mode]} · ${(TH.THEMES[l.theme] || {}).name || ''}`;
+  if (k === 'look') return `${({ auto: 'Automatic', light: 'Light', dark: 'Dark' })[l.mode]} · ${styleNow() === 'halloween' ? 'Halloween' : (TH.THEMES[l.theme] || {}).name || ''}`;
   if (k === 'display') return `${fmt(today())} · week starts ${dsp.weekStart === 'sun' ? 'Sunday' : 'Monday'}`;
   if (k === 'sync') return S.meta.cloud && S.meta.cloud.fileId ? (tokenOk() ? `On${S.cloud.token.email ? ` · ${S.cloud.token.email}` : ''}` : 'On · sign in to sync') : 'Off';
   if (k === 'backup') return 'Export or import your data';
@@ -697,7 +748,7 @@ function settingsView() {
   const pg = S.setPage;
   if (!pg) {
     const groups = [SET_PAGES.slice(0, 3), SET_PAGES.slice(3, 6), SET_PAGES.slice(6)];
-    return `${topbar('Settings', `Cycle ${VERSION}`)}${groups.map((g) => `<section class="card set-list">${g.map(([k, t]) => `<button class="set-row" data-act="set-page" data-v="${k}"><span><span class="t">${t}</span><span class="v">${h(setValue(k))}</span></span><span class="chev" aria-hidden="true">›</span></button>`).join('')}</section>`).join('')}`;
+    return `${topbar('Settings', `Cycle ${VERSION}`)}${groups.map((g) => `<section class="card set-list">${g.map(([k, t]) => `<button class="set-row" data-act="set-page" data-v="${k}"><span><span class="t">${t}</span><span class="v">${h(setValue(k))}</span></span><span class="chev" aria-hidden="true">›</span></button>`).join('')}</section>`).join('')}${styleNow() === 'halloween' ? `<div class="decor end">${witch(150)}</div>` : ''}`;
   }
   const title = (SET_PAGES.find((x) => x[0] === pg) || [, ''])[1];
   return `<button class="link back" data-act="set-page" data-v="">‹ Settings</button>${topbar(title)}<div class="settings-page">${setPage(pg)}</div>`;
@@ -768,51 +819,35 @@ function reportPage() {
     <button class="btn primary wide" data-act="rep-make">Create PDF report</button>`;
 }
 function lookCard() {
-  const l = look();
-  const seg = (act, items, cur) => `<div class="seg2" role="group">${items.map(([v, t]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${t}</button>`).join('')}</div>`;
+  const l = look(), st = styleNow();
+  const seg = (act, label, items, cur) => `<div class="seg2" role="group" aria-label="${label}">${items.map(([v, t]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${t}</button>`).join('')}</div>`;
+  const classic = TH.THEMES[l.theme] || TH.THEMES.tide;
+  const styleCard = ([k, t]) => `<button class="style-card" data-act="look-style" data-v="${k}" aria-pressed="${st === k}"><i style="background:${k === 'halloween' ? TH.HALLOWEEN_PREVIEW : `linear-gradient(160deg,${classic.light[0]},${classic.light[1]})`}"></i><strong>${t}</strong><span>${k === 'halloween' ? 'Night sky, pumpkin, bats' : 'The look you know'}</span></button>`;
   return `<section class="card look-card"><h2>Look</h2>
-    <h3>Appearance</h3>${seg('look-mode', TH.MODES, l.mode)}
-    <h3>Theme</h3><div class="swatches" role="group">${Object.entries(TH.THEMES).map(([k, t]) => `<button class="sw" data-act="look-theme" data-v="${k}" aria-pressed="${l.theme === k}"><i style="background:linear-gradient(160deg,${t.light[0]},${t.light[1]})"></i>${t.name}</button>`).join('')}</div>
-    <h3>Companion</h3>${seg('look-companion', TH.COMPANIONS, l.companion)}
+    <h3>Appearance</h3>${seg('look-mode', 'Appearance', TH.MODES, l.mode)}
+    <h3>Theme</h3><div class="styles" role="group" aria-label="Theme">${TH.STYLES.map(styleCard).join('')}</div>
+    ${st === 'halloween' ? `<label class="switch"><span>Go back to Classic on 1 November<small class="fine">Halloween ends by itself. Your Colour choice is kept.</small></span><input type="checkbox" role="switch" data-act="look-autoback" ${l.autoBack !== false ? 'checked' : ''}></label>` : `<h3>Colour</h3><div class="swatches" role="group" aria-label="Colour">${Object.entries(TH.THEMES).map(([k, t]) => `<button class="sw" data-act="look-theme" data-v="${k}" aria-pressed="${l.theme === k}"><i style="background:linear-gradient(160deg,${t.light[0]},${t.light[1]})"></i>${t.name}</button>`).join('')}</div>`}
+    <h3>Motion</h3>${seg('look-motion', 'Motion', TH.MOTIONS, l.motion || 'auto')}
+    <p class="fine">${h(TH.MOTION_NOTE)}</p>
+    <h3>Companion</h3>${seg('look-companion', 'Companion', TH.COMPANIONS, l.companion)}
     <p class="fine">${h(TH.COMPANION_CAPTION)}</p>
     <h3>Cards on Today</h3>${TH.CARDS.map(([k, t]) => `<label class="switch"><span>${t}</span><input type="checkbox" role="switch" data-act="look-card" data-k="${k}" ${l.cards[k] ? 'checked' : ''}></label>`).join('')}
     <p class="fine">Period and fertile colours stay the same in every theme. Your choices are stored only in your encrypted data.</p></section>`;
 }
-function syncCard() {
-  if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
-  const c = S.cloud, m = S.meta.cloud;
-  let body;
-  const who = tokenOk() ? `<p class="fine">${c.token.email ? `Signed in as <strong>${h(c.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
-  if (c.existing) body = `${who}<p class="fine">A Cycle vault already exists in this Google account. Choose one:</p>
-    <ol class="steps"><li><strong>Join it:</strong> enter that vault's passphrase below. The ${plural(livePeriods(S.data.periods).length, 'period')} on this device are merged into the vault, and this device switches to the vault's passphrase.</li>
-      <li><strong>Wrong account?</strong> Tap <em>Use a different Google account</em> above.</li>
-      <li><strong>Passphrase lost?</strong> Tap <em>Start a new vault</em>. The old file is kept under a backup name.</li></ol>
-    <form class="stack" data-form="vault-join">${USER}${pw('p', "Vault's passphrase", 'current-password', false, 0)}<button class="btn primary">Join vault</button></form>
-    <button class="btn danger wide" data-act="vault-new">Start a new vault</button><button class="link" data-act="vault-join-cancel">Cancel</button>`;
-  else if (m && m.fileId && c.status === 'newpass') body = `<p class="fine">The vault passphrase was changed on another device.</p><ol class="steps"><li>Enter the new vault passphrase below.</li><li>Tap <strong>Unlock vault</strong>.</li></ol>
-    <form class="stack" data-form="vault-newpass">${USER}${pw('p', 'New vault passphrase', 'current-password', false, 0)}<button class="btn primary">Unlock vault</button></form>`;
-  else if (!m || !m.fileId) body = tokenOk()
-    ? `${who || '<p class="fine">Signed in.</p>'}<p class="fine">Create the encrypted vault in your Google Drive. It uses your Cycle passphrase.</p><button class="btn primary" data-act="vault-create">Create vault</button>`
-    : '<p class="fine">Keep an encrypted copy in your own Google Drive, so your data survives a lost phone and appears on your other devices.</p><ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account to use. Use the same account on every device.</li><li>Tap <strong>Create vault</strong> (or enter the passphrase if a vault already exists).</li></ol><button class="btn primary" data-act="gsignin">Sign in with Google</button>';
-  else if (!tokenOk()) body = `<p class="fine">Google sign-in lasts about an hour. Sign in again to sync${m.dirty ? '; your latest changes are waiting' : ''}.</p><button class="btn primary" data-act="gsignin">Sign in again</button>`;
-  else body = `${who}<p class="fine">${c.status === 'error' ? `<span class="bad">${h(c.msg)}</span> ` : ''}Encrypted vault in your Google Drive (${C.VAULT_NAME}). Changes sync automatically.${m.lastSync ? ` Last sync ${fmtTime(m.lastSync)}.` : ''}</p>
-    <div class="row"><button class="btn primary" data-act="sync-now">Sync now</button><button class="btn danger" data-act="disconnect">Disconnect</button></div>`;
-  return `<section class="card"><h2>Google Drive sync</h2>${body}</section>`;
-}
-const fmtTime = (iso) => { const d = new Date(iso); return `${fmt(localToday(d))}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-
-function topbar(title, sub = '') {
-  return `<header class="topbar"><div><h1>${h(title)}</h1>${sub ? `<p class="date">${h(sub)}</p>` : ''}</div>${syncPill()}</header>`;
+function topbar(title, sub = '', deco = '') {
+  return `<header class="topbar"><div><h1>${h(title)}</h1>${sub ? `<p class="date">${h(sub)}</p>` : ''}</div>${deco ? `<span class="decor in-bar">${deco}</span>` : ''}${syncPill()}</header>`;
 }
 function syncPill() {
   if (!cfg.googleClientId || !S.meta || !S.meta.cloud || !S.meta.cloud.fileId) return '';
   const c = S.cloud; const txt = c.busy ? 'Syncing' : !tokenOk() ? 'Sign in to sync' : c.status === 'error' ? 'Sync problem' : S.meta.cloud.dirty ? 'Saving' : 'Synced';
   return `<button class="pill ${c.status === 'error' ? 'bad' : tokenOk() && !c.busy ? 'ok' : ''}" data-tab="settings" data-page="sync">${txt}</button>`;
 }
+const GEAR = '<path d="M18.83 10.47 L21.12 10.81 L21.12 13.19 L18.83 13.53 L17.91 15.75 L19.29 17.61 L17.61 19.29 L15.75 17.91 L13.53 18.83 L13.19 21.12 L10.81 21.12 L10.47 18.83 L8.25 17.91 L6.39 19.29 L4.71 17.61 L6.09 15.75 L5.17 13.53 L2.88 13.19 L2.88 10.81 L5.17 10.47 L6.09 8.25 L4.71 6.39 L6.39 4.71 L8.25 6.09 L10.47 5.17 L10.81 2.88 L13.19 2.88 L13.53 5.17 L15.75 6.09 L17.61 4.71 L19.29 6.39 L17.91 8.25Z"/><circle cx="12" cy="12" r="3.2"/>';
 function navBar() {
-  const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'], ['food', 'Food', '<path d="M12 21c-4.5 0-7-3.5-7-7.5C5 9 8 6 12 6s7 3 7 7.5c0 4-2.5 7.5-7 7.5z"/><path d="M12 6c0-1.6 1-3 2.5-3.5"/>'],
-    ['history', 'History', '<path d="M5 6h14M5 12h14M5 18h9"/>'], ['settings', 'Settings', '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>']];
-  return `<nav class="tabs" aria-label="Sections"><div class="brand" aria-hidden="true">${ringMark()}<span>Cycle</span></div>${tabs.map(([id, l, ic]) => `<button data-tab="${id}" class="${S.tab === id ? 'on' : ''}" aria-current="${S.tab === id ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}</nav>`;
+  const hw = styleNow() === 'halloween'; const cur = S.tab === 'review' ? 'today' : S.tab;
+  const tabs = [['today', 'Today', '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="4" r="2.2" class="f"/>'], ['calendar', 'Calendar', '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'], ['food', 'Food', hw ? PUMPKIN_TAB : '<path d="M12 21c-4.5 0-7-3.5-7-7.5C5 9 8 6 12 6s7 3 7 7.5c0 4-2.5 7.5-7 7.5z"/><path d="M12 6c0-1.6 1-3 2.5-3.5"/>'],
+    ['history', 'History', '<path d="M5 6h14M5 12h14M5 18h9"/>'], ['settings', 'Settings', GEAR]];
+  return `<nav class="tabs" aria-label="Sections"><div class="brand" aria-hidden="true">${ringMark()}<span>Cycle</span></div>${tabs.map(([id, l, ic]) => `<button data-tab="${id}" class="${cur === id ? 'on' : ''}" aria-current="${cur === id ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}</nav>`;
 }
 
 // ---------------- sheets ----------------
@@ -978,7 +1013,7 @@ async function setFlow(date, flow) {
 // ---------------- events ----------------
 document.addEventListener('click', async (e) => {
   const tabBtn = e.target.closest('[data-tab]');
-  if (tabBtn) { S.tab = tabBtn.dataset.tab; S.setPage = tabBtn.dataset.page || null; S.sheet = null; render(); window.scrollTo(0, 0); return; }
+  if (tabBtn) { const nt = tabBtn.dataset.tab; S.nav = tabBtn.dataset.nav || (nt !== S.tab ? 'tab' : null); S.tab = nt; S.setPage = tabBtn.dataset.page || null; S.sheet = null; render(); window.scrollTo(0, 0); return; }
   const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT') return;
   const a = b.dataset.act, d = b.dataset.date;
   try {
@@ -996,8 +1031,9 @@ document.addEventListener('click', async (e) => {
     else if (a === 'row-add') { S.imp.rows.push({ start: '', end: '' }); render(); }
     else if (a === 'import-order') { const m = S.imp; S.imp = foundFrom(m.text, m.source, b.dataset.order); render(); }
     else if (a === 'review-continue') reviewContinue();
-    else if (a === 'import-confirm') { const inc = S.imp.data, rm = S.imp.replaceIds; S.imp = null; if (rm) { const now = Date.now(); for (const p of S.data.periods) if (rm.includes(p.id)) Object.assign(p, { deleted: true, updatedAt: now }); } S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); toast(`Backup imported: ${plural(livePeriods(inc.periods).length, 'period')}`); }
-    else if (a === 'look-mode' || a === 'look-theme' || a === 'look-companion') await setLook({ [a.slice(5)]: b.dataset.v });
+    else if (a === 'import-confirm') { const inc = S.imp.data, rm = S.imp.replaceIds; S.imp = null; if (rm) { const now = Date.now(); for (const p of S.data.periods) if (rm.includes(p.id)) Object.assign(p, { deleted: true, updatedAt: now }); } const before = livePeriods(S.data.periods).length; S.data = upgrade(C.merge(S.data, inc)); await persist(); closeSheet(); const added = livePeriods(S.data.periods).length - before; toast(added > 0 ? `Backup imported: ${plural(added, 'new period')}` : 'Backup imported: nothing new, all of it was already in Cycle'); }
+    else if (a === 'look-mode' || a === 'look-theme' || a === 'look-companion' || a === 'look-motion') await setLook({ [a.slice(5)]: b.dataset.v });
+    else if (a === 'look-style') await setLook({ style: b.dataset.v, styleSet: today() });
     else if (a === 'note-seen') await setLook({ noteSeen: true });
     else if (a === 'erase-start') { S.view = 'erase'; render(); }
     else if (a === 'pw-toggle') { const inp = b.parentElement.querySelector('input'); const show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-label', show ? 'Hide passphrase' : 'Show passphrase'); }
@@ -1009,7 +1045,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'faceid-setup') await faceIdSetup();
     else if (a === 'unlock-faceid') await unlockFaceId();
     else if (a === 'close-sheet') closeSheet();
-    else if (a === 'set-page') { S.setPage = b.dataset.v || null; S.guideOpen = null; render(); window.scrollTo(0, 0); }
+    else if (a === 'set-page') { S.nav = b.dataset.v ? 'push' : 'back'; S.setPage = b.dataset.v || null; S.guideOpen = null; render(); window.scrollTo(0, 0); }
     else if (a === 'guide') { S.tab = 'settings'; S.setPage = 'guide'; S.guideOpen = b.dataset.id; S.sheet = null; render(); const g = document.getElementById(`g-${b.dataset.id}`); if (g) g.scrollIntoView({ block: 'center' }); }
     else if (a === 'disp-date' || a === 'disp-week') { const k = a === 'disp-date' ? 'dateFmt' : 'weekStart'; S.data.settings = { ...S.data.settings, display: { ...display(), [k]: b.dataset.v, updatedAt: Date.now() }, updatedAt: Date.now() }; await persist(); render(); }
     else if (a === 'del-cat') confirmSheet(b.dataset.k === 'sex' ? 'Delete all sex-life data?' : 'Delete all ovulation tests?', 'Removed on this device and, with sync on, in your Google Drive vault. This cannot be undone.', 'Delete', async () => {
@@ -1113,6 +1149,8 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.act === 'wording') {
     if (el.checked) { el.checked = false; openSheet('wording'); }
     else { S.data.settings = { ...S.data.settings, wording: false, updatedAt: Date.now() }; await persist(); render(); toast('Pregnancy-chance wording is off'); }
+  } else if (el.dataset.act === 'look-autoback') {
+    await setLook({ autoBack: el.checked });
   } else if (el.dataset.act === 'look-card') {
     const l = look(); await setLook({ cards: { ...l.cards, [el.dataset.k]: el.checked } });
   } else if ((el.dataset.act === 'row-start' || el.dataset.act === 'row-end') && S.imp && S.imp.rows) {
@@ -1220,7 +1258,12 @@ document.addEventListener('submit', async (e) => {
 });
 
 function busy(on, msg = '') { const b = $('#busy'); b.hidden = !on; b.querySelector('span').textContent = msg; }
-function afterUnlock() { busy(false); recompute(); S.view = 'app'; render(); if (cloudReady()) syncNow(true); }
+// B20: periods saved twice with the same start (older imports and syncs) are merged once, when Cycle opens
+async function repairData() {
+  const fixed = C.dedupePeriods(S.data.periods);
+  if (fixed !== S.data.periods) { S.data = { ...S.data, periods: fixed }; await persist(); }
+}
+async function afterUnlock() { busy(false); try { await repairData(); } catch (e) { console.error(e); } recompute(); S.view = 'app'; render(); if (cloudReady()) syncNow(true); }
 function lockApp() { Object.assign(S, { key: null, data: null, pred: null, sheet: null, late: null, report: null, setPage: null, guideOpen: null, histFilter: null, imp: null, view: 'locked' }); render(); }
 
 // ---------------- Face ID ----------------
@@ -1406,4 +1449,38 @@ document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }
 document.addEventListener('focusin', (e) => { if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && !/checkbox|radio|file/.test(e.target.type)) document.body.classList.add('typing'); });
 document.addEventListener('focusout', () => setTimeout(() => document.body.classList.remove('typing'), 50));
 document.addEventListener('focusout', () => setTimeout(() => { if (S.redrawLater && !busyEditing()) render(); }, 250));
+// B19: the app's own text and buttons are never selected or copied by a long press; typing fields still work normally
+document.addEventListener('selectstart', (e) => { if (!(e.target.closest && e.target.closest('input, textarea, [contenteditable=true]'))) e.preventDefault(); });
+// B18: swipe a pop-up down to close it (phone and tablet). It follows the finger from the grabber, or from anywhere when scrolled to the top.
+let drag = null;
+const touchSheet = () => matchMedia('(max-width: 999px)').matches;
+document.addEventListener('touchstart', (e) => {
+  const card = S.sheet && touchSheet() && e.target.closest && e.target.closest('.sheet-card');
+  if (!card || e.touches.length !== 1) { cancelDrag(); return; } // a second finger also puts the pop-up back
+  const y = e.touches[0].clientY;
+  drag = { card, y0: y, t0: Date.now(), inHandle: y - card.getBoundingClientRect().top <= SWIPE.handle, on: false, dy: 0 };
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!S.sheet) return;
+  if (!drag) { if (!(e.target.closest && e.target.closest('.sheet-card'))) e.preventDefault(); return; } // never scroll the page behind
+  if (e.touches.length !== 1) { cancelDrag(); return; } // a second finger: stop and put the pop-up back
+  const dy = e.touches[0].clientY - drag.y0; drag.dy = dy;
+  if (!drag.on && drag.card.scrollHeight <= drag.card.clientHeight + 1 && e.cancelable) e.preventDefault(); // a pop-up too short to scroll must not bounce the page
+  if (!drag.on && canStartDrag({ dy, inHandle: drag.inHandle, scrollTop: drag.card.scrollTop })) { drag.on = true; drag.card.classList.add('dragging'); }
+  if (drag.on) { if (e.cancelable) e.preventDefault(); drag.card.style.transform = `translateY(${dragOffset(dy)}px)`; }
+}, { passive: false });
+function cancelDrag() {
+  const d = drag; drag = null; if (!d) return;
+  d.card.classList.remove('dragging'); d.card.style.transition = 'transform .2s ease-out'; d.card.style.transform = '';
+  setTimeout(() => { d.card.style.transition = ''; }, 220);
+}
+function endDrag() {
+  const d = drag; drag = null; if (!d || !d.on) return;
+  d.card.classList.remove('dragging');
+  if (shouldClose(d.dy, Date.now() - d.t0)) {
+    d.card.style.transition = motionNow() === 'off' ? 'none' : 'transform .2s ease-out'; d.card.style.transform = 'translateY(100%)';
+    setTimeout(() => { d.card.style.transform = ''; d.card.style.transition = ''; if (S.sheet) closeSheet(); }, motionNow() === 'off' ? 0 : 190);
+  } else { d.card.style.transition = 'transform .2s ease-out'; d.card.style.transform = ''; setTimeout(() => { d.card.style.transition = ''; }, 220); }
+}
+document.addEventListener('touchend', endDrag); document.addEventListener('touchcancel', endDrag);
 window.__cycle = { busyEditing, softRender, S, predict, VERSION, render, findForRestore, restoreFlow, recompute, persist };

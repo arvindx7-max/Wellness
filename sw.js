@@ -1,9 +1,9 @@
 // Offline copy of the app's own files (NFR-04). Bump VERSION with every build.
 // B2: network first, so a new upload is used on the very first open; the saved copy is used only when offline
 // (or when the network takes longer than 4 seconds). Google traffic and other apps on this address are never touched.
-const VERSION = 'cycle-v4';
+const VERSION = 'cycle-v5';
 const FILES = ['./', './index.html', './styles.css', './app.js', './engine.js', './content.js', './rules.js', './crypto.js', './lock.js', './cloud.js', './themes.js', './companion.js', './importer.js', './report.js', './vendor/fonts/bricolage-grotesque-latin.woff', './config.js',
-  './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
+  './manifest.webmanifest', './icons/cycle-192.png', './icons/cycle-512.png', './icons/cycle-maskable-512.png', './icons/cycle-touch-180.png', './icons/cycle-tab-16.png', './icons/cycle-tab-32.png', './icons/cycle-tab-48.png', './gesture.js', './decor.js'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k.startsWith('cycle-') && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));

@@ -1,5 +1,5 @@
 // Look (U2) checks: every theme is readable in light and dark, and the companions draw for every cycle day. No real data.
-import { THEMES, ON_ACCENT, contrast, LOOK_DEFAULT } from '../themes.js';
+import { THEMES, ON_ACCENT, contrast, LOOK_DEFAULT, HALLOWEEN, effectiveStyle, halloweenEnd, effectiveMotion } from '../themes.js';
 import { moon, sprout } from '../companion.js';
 
 let pass = 0, fail = 0;
@@ -17,6 +17,28 @@ for (const [k, t] of Object.entries(THEMES)) for (const mode of ['light', 'dark'
   const r3 = contrast(t.light[0], '#FFFFFF'); ok(`${k}: hero button text (header start) on white ≥ 4.5:1`, r3 >= 4.5, r3.toFixed(2));
 }
 ok('defaults are neutral: Automatic, Tide, Moon, all cards on', LOOK_DEFAULT.mode === 'auto' && LOOK_DEFAULT.theme === 'tide' && LOOK_DEFAULT.companion === 'moon' && Object.values(LOOK_DEFAULT.cards).every(Boolean));
+
+// v5 (U9): Halloween is readable in light and dark, and returns to Classic on 1 November by a pure date rule
+for (const mode of ['light', 'dark']) {
+  const v = HALLOWEEN[mode];
+  for (const bg of [v['--bg'], v['--cell']]) {
+    for (const k of ['--label', '--label2', '--accent']) { const r = contrast(v[k], bg); ok(`halloween ${mode}: ${k} on ${bg} ≥ 4.5:1`, r >= 4.5, r.toFixed(2)); }
+  }
+  for (const k of ['--h1', '--h2']) { const r = contrast('#FFFFFF', v[k]); ok(`halloween ${mode}: white text on header ${k} ≥ 4.5:1`, r >= 4.5, r.toFixed(2)); }
+  const r2 = contrast(v['--on-accent'], v['--accent']); ok(`halloween ${mode}: button text on accent ≥ 4.5:1`, r2 >= 4.5, r2.toFixed(2));
+  const r3 = contrast(v['--coral-ink'], v['--coral']); ok(`halloween ${mode}: text on the coral card ≥ 4.5:1`, r3 >= 4.5, r3.toFixed(2));
+}
+const H = (setOn, extra = {}) => ({ style: 'halloween', styleSet: setOn, autoBack: true, ...extra });
+ok('default style is Classic', LOOK_DEFAULT.style === 'classic' && effectiveStyle(LOOK_DEFAULT, '2026-10-03') === 'classic');
+ok('Halloween shows before 1 November', effectiveStyle(H('2026-10-03'), '2026-10-31') === 'halloween');
+ok('Halloween ends on 1 November', effectiveStyle(H('2026-10-03'), '2026-11-01') === 'classic' && halloweenEnd('2026-10-03') === '2026-11-01');
+ok('chosen in November: ends the next 1 November', halloweenEnd('2026-11-05') === '2027-11-01' && effectiveStyle(H('2026-11-05'), '2027-03-01') === 'halloween');
+ok('chosen on 1 November itself: lasts until the next one', halloweenEnd('2026-11-01') === '2027-11-01');
+ok('"back to Classic" off keeps Halloween after 1 November', effectiveStyle(H('2026-10-03', { autoBack: false }), '2026-12-24') === 'halloween');
+ok('a missing or broken date never hides the choice wrongly', effectiveStyle(H(''), '2026-12-24') === 'halloween' && halloweenEnd('nonsense') === null);
+// v5 (U8): motion follows the phone until chosen
+ok('motion: follows Reduce Motion until chosen', effectiveMotion({ motion: 'auto' }, true) === 'reduced' && effectiveMotion({ motion: 'auto' }, false) === 'full');
+ok('motion: her choice wins over the phone', effectiveMotion({ motion: 'full' }, true) === 'full' && effectiveMotion({ motion: 'off' }, false) === 'off' && effectiveMotion({ motion: 'reduced' }, false) === 'reduced');
 
 // Companions: every day of cycles from 15 to 90 days, and days past the predicted end, produce clean drawings
 let bad = 0;

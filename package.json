@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:unit": "node tests/engine.test.mjs && node tests/rules.test.mjs && node tests/look.test.mjs && node tests/importer.test.mjs && node tests/cloud.test.mjs",
+    "test:unit": "node tests/engine.test.mjs && node tests/rules.test.mjs && node tests/look.test.mjs && node tests/importer.test.mjs && node tests/cloud.test.mjs && node tests/gesture.test.mjs",
     "test:e2e": "node tests/e2e.mjs",
     "test": "npm run test:unit && npm run test:e2e"
   },
