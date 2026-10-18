@@ -473,6 +473,31 @@ for (const eng of want) {
       await pg.goto(BASE); await setup(pg); return [cx, pg];
     };
     const [c7, v] = await mk(390, 844, 'light', eng === 'chromium' ? { hasTouch: true, isMobile: true } : {});
+    // B22: every Settings page opens without the error toast (with and without a Google client ID)
+    {
+      const pagesOpen = async (pg, label) => {
+        await pg.click('.tabs [data-tab=settings]');
+        const keys = await pg.$$eval('[data-act=set-page][data-v]', (els) => els.map((e) => e.dataset.v).filter(Boolean));
+        ok(`${eng} v5 B22 ${label}: Settings lists all pages`, keys.length >= 9, keys.join(','));
+        for (const k of keys) {
+          await pg.click('.tabs [data-tab=settings]');
+          if (await pg.$('[data-act=set-page][data-v=""]')) await pg.click('[data-act=set-page][data-v=""]');
+          await pg.click(`[data-act=set-page][data-v=${k}]`);
+          const toastText = await pg.$eval('#toast', (t) => (t.hidden ? '' : t.textContent));
+          const body = await pg.$eval('.settings-page', (e) => e.textContent.trim().length).catch(() => 0);
+          ok(`${eng} v5 B22 ${label}: ${k} page opens with content and no error`, body > 20 && !/wrong/i.test(toastText), `${k} toast="${toastText}" len=${body}`);
+        }
+      };
+      await pagesOpen(v, 'no client ID');
+      const cx2 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+      await cx2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
+      const pg2 = await cx2.newPage(); await pg2.clock.install({ time: new Date(NOW) }); pg2.on('pageerror', (e) => errors.push(`${eng} v5 B22: ${e.message}`));
+      await pg2.goto(BASE); await setup(pg2);
+      await pagesOpen(pg2, 'with client ID');
+      await pg2.click('.tabs [data-tab=settings]'); await pg2.click('[data-act=set-page][data-v=sync]');
+      ok(`${eng} v5 B22: sync page offers Sign in with Google`, !!(await pg2.$('[data-act=gsignin]')));
+      await cx2.close();
+    }
     // B17: icon files exist under the new names and the page and manifest point at them
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), man = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
     const refs = [...html.matchAll(/href="(icons\/[^"]+)"/g)].map((m) => m[1]).concat(man.icons.map((i) => i.src.replace(/^\.\//, '')));

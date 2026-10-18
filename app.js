@@ -834,6 +834,28 @@ function lookCard() {
     <h3>Cards on Today</h3>${TH.CARDS.map(([k, t]) => `<label class="switch"><span>${t}</span><input type="checkbox" role="switch" data-act="look-card" data-k="${k}" ${l.cards[k] ? 'checked' : ''}></label>`).join('')}
     <p class="fine">Period and fertile colours stay the same in every theme. Your choices are stored only in your encrypted data.</p></section>`;
 }
+function syncCard() {
+  if (!cfg.googleClientId) return '<section class="card"><h2>Google Drive sync</h2><p class="fine">Not set up yet. Add the Google sign-in ID to config.js to keep an encrypted copy in your Google Drive and use Cycle on more than one device.</p></section>';
+  const c = S.cloud, m = S.meta.cloud;
+  let body;
+  const who = tokenOk() ? `<p class="fine">${c.token.email ? `Signed in as <strong>${h(c.token.email)}</strong>` : 'Signed in to Google'}. <button class="link" data-act="gswitch">Use a different Google account</button></p>` : '';
+  if (c.existing) body = `${who}<p class="fine">A Cycle vault already exists in this Google account. Choose one:</p>
+    <ol class="steps"><li><strong>Join it:</strong> enter that vault's passphrase below. The ${plural(livePeriods(S.data.periods).length, 'period')} on this device are merged into the vault, and this device switches to the vault's passphrase.</li>
+      <li><strong>Wrong account?</strong> Tap <em>Use a different Google account</em> above.</li>
+      <li><strong>Passphrase lost?</strong> Tap <em>Start a new vault</em>. The old file is kept under a backup name.</li></ol>
+    <form class="stack" data-form="vault-join">${USER}${pw('p', "Vault's passphrase", 'current-password', false, 0)}<button class="btn primary">Join vault</button></form>
+    <button class="btn danger wide" data-act="vault-new">Start a new vault</button><button class="link" data-act="vault-join-cancel">Cancel</button>`;
+  else if (m && m.fileId && c.status === 'newpass') body = `<p class="fine">The vault passphrase was changed on another device.</p><ol class="steps"><li>Enter the new vault passphrase below.</li><li>Tap <strong>Unlock vault</strong>.</li></ol>
+    <form class="stack" data-form="vault-newpass">${USER}${pw('p', 'New vault passphrase', 'current-password', false, 0)}<button class="btn primary">Unlock vault</button></form>`;
+  else if (!m || !m.fileId) body = tokenOk()
+    ? `${who || '<p class="fine">Signed in.</p>'}<p class="fine">Create the encrypted vault in your Google Drive. It uses your Cycle passphrase.</p><button class="btn primary" data-act="vault-create">Create vault</button>`
+    : '<p class="fine">Keep an encrypted copy in your own Google Drive, so your data survives a lost phone and appears on your other devices.</p><ol class="steps"><li>Tap <strong>Sign in with Google</strong>.</li><li>Choose the Google account to use. Use the same account on every device.</li><li>Tap <strong>Create vault</strong> (or enter the passphrase if a vault already exists).</li></ol><button class="btn primary" data-act="gsignin">Sign in with Google</button>';
+  else if (!tokenOk()) body = `<p class="fine">Google sign-in lasts about an hour. Sign in again to sync${m.dirty ? '; your latest changes are waiting' : ''}.</p><button class="btn primary" data-act="gsignin">Sign in again</button>`;
+  else body = `${who}<p class="fine">${c.status === 'error' ? `<span class="bad">${h(c.msg)}</span> ` : ''}Encrypted vault in your Google Drive (${C.VAULT_NAME}). Changes sync automatically.${m.lastSync ? ` Last sync ${fmtTime(m.lastSync)}.` : ''}</p>
+    <div class="row"><button class="btn primary" data-act="sync-now">Sync now</button><button class="btn danger" data-act="disconnect">Disconnect</button></div>`;
+  return `<section class="card"><h2>Google Drive sync</h2>${body}</section>`;
+}
+const fmtTime = (iso) => { const d = new Date(iso); return `${fmt(localToday(d))}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 function topbar(title, sub = '', deco = '') {
   return `<header class="topbar"><div><h1>${h(title)}</h1>${sub ? `<p class="date">${h(sub)}</p>` : ''}</div>${deco ? `<span class="decor in-bar">${deco}</span>` : ''}${syncPill()}</header>`;
 }
