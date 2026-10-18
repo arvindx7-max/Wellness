@@ -49,7 +49,18 @@ async function setup(p) {
     }
   }
 }
+// v6: a fresh start shows splash, then features, then get started; walk to the last one (tapping, as a person would)
+async function toStart(p) {
+  await p.waitForSelector('.welcome', { timeout: 45000 });
+  for (let i = 0; i < 4 && !(await p.$('.w-start')); i++) {
+    const nx = await p.$('.w-splash .w-hit, .w-features .w-next');
+    if (nx) await nx.click().catch(() => {});
+    await p.waitForTimeout(120);
+  }
+  await p.waitForSelector('.w-start [data-act=start]', { timeout: 20000 });
+}
 async function setupOnce(p) {
+  await toStart(p);
   await p.click('[data-act=start]');
   await p.fill('input[name=last]', LAST); await p.fill('input[name=usualCycle]', '30');
   await p.fill('input[name=birthYear]', '1990'); await p.check('input[name=diet][value=vegetarian]'); await p.check('input[name=accept]');
@@ -165,7 +176,7 @@ for (const eng of want) {
     const c2 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c2.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c2.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3: ${e.message}`));
-    await q.goto(BASE);
+    await q.goto(BASE); await toStart(q);
     ok(`${eng} v3: welcome offers a backup start`, await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }).then(() => true, () => false));
     ok(`${eng} v3: greyed Drive button is explained`, (await q.isDisabled('[data-act=restore-start]')) && /not available in this copy/.test(await q.textContent('.intro')));
     await q.click('[data-act=import-start]');
@@ -237,7 +248,7 @@ for (const eng of want) {
     const c3 = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await c3.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
     const r3 = await c3.newPage(); await r3.clock.install({ time: new Date(NOW) }); r3.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
-    await r3.goto(BASE); await r3.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 });
+    await r3.goto(BASE); await toStart(r3); await r3.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 });
     await r3.click('[data-act=restore-start]');
     await r3.evaluate(() => { window.__cycle.S.restore = { token: 'dummy_token_A' }; window.__cycle.render(); });
     ok(`${eng} v3.1: no-vault screen explains why`, /No Cycle vault was found/.test(await r3.textContent('.intro')) && /only after Cycle sync has been turned on/.test(await r3.textContent('.intro')));
@@ -257,7 +268,7 @@ for (const eng of want) {
     await c4.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:''};" }));
     const q = await c4.newPage(); await q.clock.install({ time: new Date(NOW) }); q.on('pageerror', (e) => errors.push(`${eng} v3.1: ${e.message}`));
     const seen = []; q.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') seen.push(m.text().slice(0, 160)); }); q.on('requestfailed', (r) => seen.push(`request failed ${r.url().slice(-40)}`)); q.on('worker', () => seen.push('worker started'));
-    await q.goto(BASE); await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }); await q.click('[data-act=import-start]');
+    await q.goto(BASE); await toStart(q); await q.waitForSelector('[data-act=import-start]', { timeout: 45000 }); await q.click('[data-act=import-start]');
     const accept = await q.getAttribute('input[data-act=import-pick]', 'accept');
     ok(`${eng} v3.1: the file picker also offers PDF, CSV and text`, /pdf/.test(accept) && /csv/.test(accept) && /txt/.test(accept) && /json/.test(accept), accept);
     ok(`${eng} v3.1: picker screen has numbered steps`, (await q.locator('ol.steps li').count()) >= 6);
@@ -451,7 +462,7 @@ for (const eng of want) {
     await c6.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
     await c6.route('https://www.googleapis.com/drive/v3/files?**', async (r) => { await new Promise((x) => setTimeout(x, 400)); r.fulfill({ contentType: 'application/json', body: JSON.stringify({ files: [{ id: 'dummy_file_A', name: 'cycle-vault.json' }] }) }); });
     const w = await c6.newPage(); w.on('pageerror', (e) => errors.push(`${eng} v4 B16: ${e.message}`));
-    await w.goto(BASE); await w.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 }); await w.click('[data-act=restore-start]');
+    await w.goto(BASE); await toStart(w); await w.waitForSelector('[data-act=restore-start]:not([disabled])', { timeout: 45000 }); await w.click('[data-act=restore-start]');
     ok(`${eng} v4: B16 root cause: before sign-in the restore screen asks to sign in, never "Vault found"`, (await w.isVisible('[data-act=restore-signin]')) && !/Vault found/.test(await w.textContent('#app')));
     const race = await w.evaluate(async () => {
       const c = window.__cycle; c.S.restore = { token: { token: 'dummy_token_A', exp: Date.now() + 3600e3 } };
@@ -463,6 +474,61 @@ for (const eng of want) {
     const found = await w.evaluate(async () => { const c = window.__cycle; c.S.restore = { token: { token: 'dummy_token_A', exp: Date.now() + 3600e3 } }; await c.findForRestore(); return { id: c.S.restore.fileId, text: document.body.textContent }; });
     ok(`${eng} v4: B16 the switch account option shows even without the account name`, found.id === 'dummy_file_A' && /Signed in to Google/.test(found.text) && /Use a different Google account/.test(found.text));
     await c6.close();
+  }
+  // ---- v6: first-run welcome, three screens in order (splash, features, get started) with page motion ----
+  {
+    const open = async (w, h, scheme, extra = {}) => {
+      const cx = await (await fresh()).newContext({ locale: 'en-GB', viewport: { width: w, height: h }, colorScheme: scheme, serviceWorkers: 'block', ...extra });
+      await cx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.CYCLE_CONFIG={googleClientId:'test-client-id.apps.googleusercontent.com'};" }));
+      const pg = await cx.newPage(); pg.on('pageerror', (e) => errors.push(`${eng} v6: ${e.message}`)); await pg.goto(BASE); return [cx, pg];
+    };
+    const step = (pg) => pg.evaluate(() => (document.querySelector('.welcome') || {}).className || '');
+    const seen = [];
+    const [cx, w] = await open(390, 844, 'light');
+    await w.waitForSelector('.w-splash', { timeout: 45000 });
+    seen.push('splash');
+    ok(`${eng} v6: first screen is the splash with the name and tagline`, (await w.textContent('.w-splash')).includes('Cycle') && /companion/.test(await w.textContent('.w-splash')) && !(await w.$('[data-act=start]')));
+    ok(`${eng} v6: splash moves on by itself to the features screen`, await w.waitForSelector('.w-features', { timeout: 8000 }).then(() => true, () => false));
+    ok(`${eng} v6: moving forward plays the push slide`, /anim-push/.test(await step(w)), await step(w));
+    ok(`${eng} v6: features screen shows four things and two dots`, (await w.$$('.w-feat')).length === 4 && (await w.$$('.w-dot')).length === 2);
+    seen.push('features');
+    await w.click('.w-next'); await w.waitForSelector('.w-start'); seen.push('start');
+    ok(`${eng} v6: screens come in the picture's order: splash, features, get started`, seen.join() === 'splash,features,start');
+    ok(`${eng} v6: get started offers all four actions and the Safari note`, (await w.isVisible('.w-start [data-act=start]')) && (await w.isVisible('.w-start [data-act=import-start]')) && !(await w.isDisabled('.w-start [data-act=restore-start]')) && /Used Cycle before on this iPhone/.test(await w.textContent('.w-start')));
+    ok(`${eng} v6: no log-in or terms links`, !/Log in|Terms of Service|Privacy Policy/i.test(await w.textContent('.welcome')));
+    const fits = await w.evaluate(() => { const b = (q) => document.querySelector(q).getBoundingClientRect(); return { n: b('.w-notice').bottom, a: b('[data-act=start]').top, h: innerHeight, sw: document.documentElement.scrollWidth, iw: innerWidth }; });
+    ok(`${eng} v6: get started fits a 390 x 844 phone without scrolling sideways`, fits.n <= fits.h && fits.a > 0 && fits.sw <= fits.iw, JSON.stringify(fits));
+    await w.screenshot({ path: path.join(OUT, `${eng}-welcome-3-start-light.png`) });
+    await w.click('.w-back'); await w.waitForSelector('.w-features');
+    ok(`${eng} v6: back plays the back slide and returns to features`, /anim-back/.test(await step(w)), await step(w));
+    await w.click('.w-dot:nth-child(2)'); await w.waitForSelector('.w-start');
+    ok(`${eng} v6: the dots move between pages`, true);
+    // contrast of the welcome colours (hex pairs only)
+    const cols = await w.evaluate(() => { const g = (n) => getComputedStyle(document.querySelector('.welcome')).getPropertyValue(n).trim(); return Object.fromEntries(['--w-bg1', '--w-bg2', '--w-bg3', '--w-ink', '--w-text', '--w-primary', '--w-on', '--w-pink', '--w-pink-bg', '--w-lilac', '--w-lilac-bg', '--w-teal', '--w-teal-bg', '--w-amber', '--w-amber-bg'].map((n) => [n, g(n)])); });
+    const okc = (a, b, min) => contrast(cols[a], cols[b]) >= min;
+    ok(`${eng} v6 light: text, buttons and icons are readable (4.5:1 text, 3:1 icons)`, okc('--w-ink', '--w-bg2', 4.5) && okc('--w-text', '--w-bg1', 4.5) && okc('--w-text', '--w-bg2', 4.5) && okc('--w-text', '--w-bg3', 4.5) && okc('--w-on', '--w-primary', 4.5) && okc('--w-pink', '--w-pink-bg', 3) && okc('--w-lilac', '--w-lilac-bg', 3) && okc('--w-teal', '--w-teal-bg', 3) && okc('--w-amber', '--w-amber-bg', 3), JSON.stringify(cols));
+    await cx.close();
+
+    const [cd, d] = await open(390, 844, 'dark');
+    await d.waitForSelector('.w-splash', { timeout: 45000 }); await d.click('.w-hit'); await d.waitForSelector('.w-features'); await d.screenshot({ path: path.join(OUT, `${eng}-welcome-2-features-dark.png`) });
+    await d.click('.w-next'); await d.waitForSelector('.w-start'); await d.screenshot({ path: path.join(OUT, `${eng}-welcome-3-start-dark.png`) });
+    const dc = await d.evaluate(() => { const g = (n) => getComputedStyle(document.querySelector('.welcome')).getPropertyValue(n).trim(); return Object.fromEntries(['--w-bg1', '--w-bg2', '--w-bg3', '--w-ink', '--w-text', '--w-primary', '--w-on'].map((n) => [n, g(n)])); });
+    ok(`${eng} v6 dark: text and buttons are readable (4.5:1)`, ['--w-bg1', '--w-bg2', '--w-bg3'].every((b) => contrast(dc['--w-ink'], dc[b]) >= 4.5 && contrast(dc['--w-text'], dc[b]) >= 4.5) && contrast(dc['--w-on'], dc['--w-primary']) >= 4.5, JSON.stringify(dc));
+    ok(`${eng} v6 dark: get started has no sideways scroll`, await d.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await cd.close();
+
+    const [cl, l] = await open(1470, 956, 'light');
+    await l.waitForSelector('.w-splash', { timeout: 45000 }); await l.click('.w-hit'); await l.waitForSelector('.w-features'); await l.click('.w-next'); await l.waitForSelector('.w-start');
+    const lap = await l.evaluate(() => { const b = (q) => document.querySelector(q).getBoundingClientRect(); const n = b('.w-notice'); return { n: n.bottom, h: innerHeight, sw: document.documentElement.scrollWidth, iw: innerWidth, col: b('.w-actions').width }; });
+    ok(`${eng} v6: laptop get started fits and has no sideways scroll`, lap.n <= lap.h && lap.sw <= lap.iw && lap.col < 460, JSON.stringify(lap));
+    await l.screenshot({ path: path.join(OUT, `${eng}-welcome-3-start-laptop.png`) });
+    await cl.close();
+
+    // phones set to reduced motion get a plain fade, not a slide
+    const [cr, r] = await open(390, 844, 'light', { reducedMotion: 'reduce' });
+    await r.waitForSelector('.w-splash', { timeout: 45000 }); await r.click('.w-hit'); await r.waitForSelector('.w-features');
+    ok(`${eng} v6: reduced motion uses a fade, not a slide`, /anim-fade/.test(await step(r)) && !/anim-push/.test(await step(r)), await step(r));
+    await cr.close();
   }
   // ---- v5: swipe and scroll lock (B18), no selection (B19), duplicate periods (B20), Review (U7), motion (U8), Theme and Halloween (U9), switches (U10), icons (B17) ----
   {
