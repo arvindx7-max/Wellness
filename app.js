@@ -8,10 +8,10 @@ import { evaluate, recsFor, heavyDays, lateResult } from './rules.js';
 import * as TH from './themes.js';
 import { moon, sprout } from './companion.js';
 import { SWIPE, canStartDrag, shouldClose, dragOffset } from './gesture.js';
-import { pumpkin, witch, PUMPKIN_TAB, HERO_SKY } from './decor.js';
+import { pumpkin, witch, ghost, star, PUMPKIN_TAB, HERO_SKY } from './decor.js';
 import { findPeriods, pdfToText } from './importer.js';
 
-export const VERSION = 'v5';
+export const VERSION = 'v5.1';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -748,7 +748,7 @@ function settingsView() {
   const pg = S.setPage;
   if (!pg) {
     const groups = [SET_PAGES.slice(0, 3), SET_PAGES.slice(3, 6), SET_PAGES.slice(6)];
-    return `${topbar('Settings', `Cycle ${VERSION}`)}${groups.map((g) => `<section class="card set-list">${g.map(([k, t]) => `<button class="set-row" data-act="set-page" data-v="${k}"><span><span class="t">${t}</span><span class="v">${h(setValue(k))}</span></span><span class="chev" aria-hidden="true">›</span></button>`).join('')}</section>`).join('')}${styleNow() === 'halloween' ? `<div class="decor end">${witch(150)}</div>` : ''}`;
+    return `${topbar('Settings', `Cycle ${VERSION}`, styleNow() === 'halloween' ? `${star(16)}${pumpkin(40)}${ghost(38)}` : '')}${groups.map((g) => `<section class="card set-list">${g.map(([k, t]) => `<button class="set-row" data-act="set-page" data-v="${k}"><span><span class="t">${t}</span><span class="v">${h(setValue(k))}</span></span><span class="chev" aria-hidden="true">›</span></button>`).join('')}</section>`).join('')}${styleNow() === 'halloween' ? `<div class="decor end">${witch(150)}</div>` : ''}`;
   }
   const title = (SET_PAGES.find((x) => x[0] === pg) || [, ''])[1];
   return `<button class="link back" data-act="set-page" data-v="">‹ Settings</button>${topbar(title)}<div class="settings-page">${setPage(pg)}</div>`;
