@@ -1,0 +1,20 @@
+// First-run welcome (v6): order of the three screens and the actions each one offers. Markup only, no data.
+import { welcomeHtml, STEPS } from '../welcome.js';
+let pass = 0, fail = 0;
+const ok = (n, c) => { c ? pass++ : (fail++, console.log(`FAIL  ${n}`)); };
+const page = (step, extra = {}) => welcomeHtml({ step, mark: '<svg class="mark"></svg>', canRestore: true, ...extra });
+const acts = (h) => [...h.matchAll(/data-act="([^"]+)"/g)].map((m) => m[1]);
+ok('the screens run splash, features, get started, left to right', STEPS.join() === 'splash,features,start');
+ok('each screen has its own class', STEPS.every((s) => page(s).includes(`w-${s}`)));
+ok('splash can be tapped to continue', acts(page('splash')).includes('w-go') && /data-v="features"/.test(page('splash')));
+ok('features leads on to get started, by arrow and by dots', /class="w-next" data-act="w-go" data-v="start"/.test(page('features')) && (page('features').match(/class="w-dot"/g) || []).length === 2);
+ok('features lists four things with no personal data', (page('features').match(/class="w-feat"/g) || []).length === 4 && !/@|\d{4}-\d{2}-\d{2}/.test(page('features')));
+ok('get started keeps the four actions the old page had', ['start', 'import-start', 'restore-start'].every((a) => acts(page('start')).includes(a)) && /Used Cycle before on this iPhone\?/.test(page('start')));
+ok('get started has a way back', /class="w-back" data-act="w-go" data-v="features"/.test(page('start')));
+ok('Drive restore is greyed and explained when Google sign-in is not set up', /data-act="restore-start" disabled/.test(page('start', { canRestore: false })) && /not available in this copy/.test(page('start', { canRestore: false })));
+ok('Drive restore is on when Google sign-in is set up', !/data-act="restore-start" disabled/.test(page('start')));
+ok('there is no log-in, terms or privacy-policy link (the app has no accounts)', !/Log in|Terms of Service|Privacy Policy/i.test(STEPS.map((s) => page(s)).join('')));
+ok('the motion class is placed on the screen', page('start', { anim: 'anim-push' }).includes('welcome w-start anim-push'));
+ok('an unknown step falls back to get started', page('nonsense').includes('w-start'));
+ok('decoration is hidden from screen readers', !/<svg(?![^>]*aria-hidden="true")[^>]*class="w-(hills|sprig|leaf-tr)/.test(page('splash') + page('features')));
+console.log(`welcome: ${pass} passed, ${fail} failed`); if (fail) process.exit(1);

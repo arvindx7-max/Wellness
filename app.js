@@ -10,8 +10,9 @@ import { moon, sprout } from './companion.js';
 import { SWIPE, canStartDrag, shouldClose, dragOffset } from './gesture.js';
 import { pumpkin, witch, ghost, star, PUMPKIN_TAB, HERO_SKY } from './decor.js';
 import { findPeriods, pdfToText } from './importer.js';
+import { welcomeHtml, STEPS as WELCOME_STEPS } from './welcome.js';
 
-export const VERSION = 'v5.1';
+export const VERSION = 'v6';
 const cfg = window.CYCLE_CONFIG || {};
 const AUTO_LOCK_MS = 5 * 60 * 1000; // NFR-05
 
@@ -25,7 +26,7 @@ async function kvClear() { const x = await db(); return new Promise((res) => { c
 
 // ---------------- state ----------------
 const S = {
-  view: 'boot', tab: 'today', meta: null, key: null, data: null, pred: null, month: null,
+  view: 'boot', wstep: 'start', tab: 'today', meta: null, key: null, data: null, pred: null, month: null,
   sheet: null, draft: {}, faceIdOk: false, hiddenAt: 0, imp: null,
   cloud: { token: null, status: 'off', msg: '', busy: false },
 };
@@ -169,17 +170,16 @@ function pw(name, labelText, ac, focus = false, min = 10) {
 }
 
 // ---------------- first run ----------------
+// v6: the first-run welcome is three screens (splash, features, get started) with a page slide between them
+let splashTimer = null;
 function welcomeView() {
-  return `<section class="intro">
-    ${ringMark()}
-    <h1>Cycle</h1>
-    <p class="lede">A private tracker for your periods and fertile days. Everything stays encrypted on your phone and, if you choose, in your own Google Drive.</p>
-    <button class="btn primary wide" data-act="start">Set up on this phone</button>
-    <button class="btn wide" data-act="import-start">Start from a backup file</button>
-    <button class="btn wide" data-act="restore-start" ${cfg.googleClientId ? '' : 'disabled'}>Restore from Google Drive</button>
-    ${cfg.googleClientId ? '' : '<p class="fine">Restoring from Google Drive is not available in this copy of Cycle, because Google sign-in is not set up.</p>'}
-    <div class="notice"><p><strong>Used Cycle before on this iPhone?</strong> The Home Screen app and Safari keep separate data. If you set Cycle up from the Home Screen icon, open it from there; if you used it in Safari, open it in Safari. Setting up here creates a new, empty Cycle.</p></div>
-  </section>`;
+  const nav = S.nav; S.nav = null; const mo = motionNow();
+  const anim = !nav || mo === 'off' ? '' : mo === 'reduced' ? 'anim-fade' : `anim-${nav}`;
+  clearTimeout(splashTimer); splashTimer = null;
+  if (S.wstep === 'splash') {
+    splashTimer = setTimeout(() => { if (S.view === 'welcome' && S.wstep === 'splash') { S.nav = 'push'; S.wstep = 'features'; render(); } }, 2200);
+  }
+  return welcomeHtml({ step: S.wstep, mark: ringMark(), canRestore: !!cfg.googleClientId, anim });
 }
 function onboardView() {
   const d = S.draft;
@@ -1040,12 +1040,13 @@ document.addEventListener('click', async (e) => {
   const a = b.dataset.act, d = b.dataset.date;
   try {
     if (a === 'start') { S.view = 'onboard'; render(); }
+    else if (a === 'w-go') { const to = WELCOME_STEPS.includes(b.dataset.v) ? b.dataset.v : 'start'; S.nav = WELCOME_STEPS.indexOf(to) > WELCOME_STEPS.indexOf(S.wstep) ? 'push' : 'back'; S.wstep = to; render(); }
     else if (a === 'restore-start') { S.restore = {}; S.view = 'restore'; render(); }
-    else if (a === 'restore-cancel') { S.view = S.meta ? 'forgot' : 'welcome'; render(); }
+    else if (a === 'restore-cancel') { S.view = S.meta ? 'forgot' : 'welcome'; S.wstep = 'start'; render(); }
     else if (a === 'forgot') { S.imp = null; S.view = 'forgot'; render(); }
     else if (a === 'back-locked') { S.view = 'locked'; render(); }
     else if (a === 'import-start') { S.imp = null; S.view = 'import'; render(); }
-    else if (a === 'import-back') { S.imp = null; S.view = 'welcome'; render(); }
+    else if (a === 'import-back') { S.imp = null; S.view = 'welcome'; S.wstep = 'start'; render(); }
     else if (a === 'import-cancel') { S.imp = null; closeSheet(); }
     else if (a === 'import-reset') { S.imp = null; if (S.view === 'import') render(); else closeSheet(); }
     else if (a === 'paste-open') openSheet('import-paste');
@@ -1452,7 +1453,7 @@ function csv() {
   if (red && red.token) { S.cloud.token = { token: red.token, exp: red.exp }; try { S.cloud.token.email = await C.accountEmail(red.token); } catch { /* shown only when known */ } await kvSet('gtoken', S.cloud.token); }
   if (!S.meta || (red && red.next === 'restore')) {
     if (red && red.next === 'restore') { S.restore = { token: red.token ? S.cloud.token : null }; S.view = 'restore'; if (red.token) { try { await findForRestore(); } catch (e) { toast(e.message); } } }
-    else S.view = 'welcome';
+    else { S.view = 'welcome'; S.wstep = 'splash'; }
   } else { S.view = 'locked'; if (red && red.next === 'sync') S.tab = 'settings'; }
   if (red && red.error) toast(red.error);
   render();
