@@ -1,6 +1,7 @@
 // Look (U2) checks: every theme is readable in light and dark, and the companions draw for every cycle day. No real data.
 import { THEMES, ON_ACCENT, contrast, LOOK_DEFAULT, HALLOWEEN, effectiveStyle, halloweenEnd, effectiveMotion } from '../themes.js';
 import { moon, sprout } from '../companion.js';
+import { pumpkin, PUMPKIN_TAB, HERO_SKY, ghost, star } from '../decor.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, info = '') => { cond ? pass++ : fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : `  ${info}`}`); };
@@ -40,6 +41,12 @@ ok('a missing or broken date never hides the choice wrongly', effectiveStyle(H('
 ok('motion: follows Reduce Motion until chosen', effectiveMotion({ motion: 'auto' }, true) === 'reduced' && effectiveMotion({ motion: 'auto' }, false) === 'full');
 ok('motion: her choice wins over the phone', effectiveMotion({ motion: 'full' }, true) === 'full' && effectiveMotion({ motion: 'off' }, false) === 'off' && effectiveMotion({ motion: 'reduced' }, false) === 'reduced');
 
+// v5.1: the pumpkin lobes are solid and the middle lobe is drawn last, so it covers the side lobes; icons and sketches are decoration
+const lobes = [...pumpkin(60).matchAll(/<ellipse cx="(\d+)"[^>]*fill="([^"]+)"/g)];
+ok('pumpkin: three solid lobes, the middle one drawn last (on top)', lobes.length === 3 && lobes.every((m) => m[2] === 'var(--sketch-solid)') && lobes[2][1] === '50');
+ok('pumpkin tab icon: body, two ribs, stem and leaf', (PUMPKIN_TAB.match(/<path/g) || []).length === 5);
+ok('Halloween palettes define the solid and ghost colours', ['light', 'dark'].every((m) => HALLOWEEN[m]['--sketch-solid'] && HALLOWEEN[m]['--ghost']));
+ok('bats: three drawn, hidden from screen readers, no NaN', (HERO_SKY.match(/<g transform/g) || []).length === 3 && /aria-hidden="true"/.test(HERO_SKY) && !/NaN|undefined/.test(HERO_SKY + ghost(40) + star(16)));
 // Companions: every day of cycles from 15 to 90 days, and days past the predicted end, produce clean drawings
 let bad = 0;
 for (const len of [15, 24, 30, 38, 90]) for (let d = 1; d <= len + 8; d++) {

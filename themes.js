@@ -14,10 +14,10 @@ export const STYLES = [['classic', 'Classic'], ['halloween', 'Halloween']];
 export const HALLOWEEN = {
   light: { '--bg': '#F7F0E4', '--cell': '#FFFDF8', '--cell2': '#EFE4D2', '--label': '#1E1426', '--label2': '#524954', '--label3': 'rgba(30, 20, 38, .30)', '--sep': 'rgba(30, 20, 38, .14)', '--fill': 'rgba(30, 20, 38, .08)', '--fill2': 'rgba(30, 20, 38, .14)', '--seg-on': '#FFFDF8',
     '--h1': '#3B1F5C', '--h2': '#A3420F', '--glow': '#F2873A', '--accent': '#B4470C', '--accent-tint': 'rgba(180, 71, 12, .12)', '--on-accent': '#FFFFFF', '--coral': '#F2873A', '--coral-ink': '#1E1426', '--orange': '#7A4E00', '--ring-base': 'rgba(30, 20, 38, .12)',
-    '--sketch': 'rgba(140, 62, 18, .72)', '--sketch-fill': 'rgba(242, 135, 58, .16)', '--witch': 'rgba(91, 63, 168, .72)', '--witch-fill': 'rgba(91, 63, 168, .10)' },
+    '--sketch': 'rgba(140, 62, 18, .72)', '--sketch-fill': 'rgba(242, 135, 58, .16)', '--sketch-solid': '#F8DFC6', '--ghost': '#FFFDF8', '--witch': 'rgba(91, 63, 168, .72)', '--witch-fill': 'rgba(91, 63, 168, .10)' },
   dark: { '--bg': '#0E0A14', '--cell': '#1B1424', '--cell2': '#2A2036', '--label': '#F6EFE4', '--label2': '#BAB3AE', '--label3': 'rgba(246, 239, 228, .30)', '--sep': 'rgba(255, 255, 255, .12)', '--fill': 'rgba(255, 255, 255, .10)', '--fill2': 'rgba(255, 255, 255, .18)', '--seg-on': '#3A2E4A',
     '--h1': '#24123A', '--h2': '#7A2E12', '--glow': '#FF8A2A', '--accent': '#FF8A2A', '--accent-tint': 'rgba(255, 138, 42, .18)', '--on-accent': '#1A0E05', '--coral': '#FF8A2A', '--coral-ink': '#1A0E05', '--orange': '#FFD15C', '--ring-base': 'rgba(255, 255, 255, .14)',
-    '--sketch': 'rgba(255, 200, 140, .78)', '--sketch-fill': 'rgba(255, 138, 42, .16)', '--witch': 'rgba(214, 196, 255, .78)', '--witch-fill': 'rgba(160, 130, 255, .16)' },
+    '--sketch': 'rgba(255, 200, 140, .78)', '--sketch-fill': 'rgba(255, 138, 42, .16)', '--sketch-solid': '#3A2418', '--ghost': '#2A2036', '--witch': 'rgba(214, 196, 255, .78)', '--witch-fill': 'rgba(160, 130, 255, .16)' },
 };
 export const HALLOWEEN_PREVIEW = 'linear-gradient(160deg, #24123A, #4A1F3A 58%, #7A2E12)';
 // "Back to Classic on 1 November": a pure rule, nothing is written when the date passes. Halloween ends on the first 1 November after the day it was chosen.
