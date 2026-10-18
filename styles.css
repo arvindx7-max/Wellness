@@ -565,13 +565,13 @@ details.done { margin: 16px 0 0; } details.done p { font-size: 15px; margin: 10p
 
 /* U9: Halloween. Colours come from the script (themes.js); these are the extras. Sketches are decoration only. */
 .decor { display: flex; pointer-events: none; opacity: .88; line-height: 0; }
-.decor.in-bar { margin: 0 8px 0 auto; align-self: center; }
+.decor.in-bar { margin: 0 8px 0 auto; align-self: center; gap: 10px; align-items: center; }
 .screen { position: relative; }
 .decor.corner { position: absolute; right: -6px; bottom: -8px; }
 .card.food-teaser { position: relative; overflow: hidden; }
 .decor.patch { justify-content: center; align-items: flex-end; gap: 6px; padding: 16px 0 4px; }
 .decor.end { justify-content: center; padding: 6px 0 12px; }
-.hero .sky { position: absolute; right: 4px; top: 6px; z-index: 0; pointer-events: none; }
+.hero .sky { position: absolute; right: 8px; bottom: 118px; width: 112px; height: auto; z-index: 0; pointer-events: none; }
 :root[data-style="halloween"] .hero .big, :root[data-style="halloween"] .topbar h1, :root[data-style="halloween"] .sheet-card h2 { letter-spacing: -0.01em; }
 :root[data-style="halloween"] .card.food-teaser, :root[data-style="halloween"] .card.checkin.focus { box-shadow: var(--edge), var(--lift); }
 :root[data-style="halloween"] .card.checkin.focus { color: var(--coral-ink); }
